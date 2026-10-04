@@ -79,6 +79,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   │   ├── validate.py       AST safety checks (layer 1)
 │   │   ├── execute.py        Runs validated SQL in a read-only transaction
 │   │   ├── summarize.py      Turns result rows into a short answer
+│   │   ├── visualize.py      Picks a chart for a result (first version; Ben owns it)
 │   │   ├── pipeline.py       question -> prompt -> SQL -> validate -> execute -> summarize
 │   │   ├── retrieval/        Phase 4: embed.py, store.py, select.py
 │   │   └── querylog.py       Phase 7: logs questions, SQL, outcome
@@ -121,6 +122,8 @@ The frontend talks to the backend only through `/api`. Keep these shapes stable;
 | `POST /api/query` | Body `{"question": str}`. Returns `{"status": "success" or "error", "sql": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
 
 The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. `visualizations` and `kpis` are empty until `nl2sql/visualize.py` is wired in.
+
+Proposed, not yet part of the contract: a `chart` field produced by `nl2sql/visualize.py`, for example `{"type": "bar", "x": ["title"], "y": "rental_count"}`, or `null` when a table fits best. Ben decides whether and how it is added; until then the frontend should not rely on it.
 
 ## Pipeline
 
