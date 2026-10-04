@@ -4,6 +4,7 @@ import datetime as dt
 import json
 from decimal import Decimal
 
+from nl2sql.display import Display
 from nl2sql.pipeline import Answer
 from nl2sql.response import outage_response, to_response
 
@@ -151,3 +152,60 @@ def test_the_answering_model_is_reported() -> None:
     rejected = Answer(question="q", sql="DELETE FROM film", error="x", error_code="rejected", model="gemma-4-31b-it")
     assert to_response(rejected)["model"] == "gemma-4-31b-it"
     assert outage_response("model_unavailable", "down")["model"] == ""
+
+
+# ---- display rules (bank comments) ----
+
+BANK_DISPLAY = Display(
+    values_by_column={"status": {"B": "Finished, not paid"}},
+    values_anywhere={"VYDAJ": "Debit (money out)"},
+    column_labels={"a11": "Average salary"},
+    currency="CZK",
+)
+
+
+def test_display_translates_values_labels_and_currency() -> None:
+    body = to_response(
+        Answer(question="q", sql="SELECT ...", columns=["status", "a11", "balance"],
+               rows=[("B", 9000, Decimal("120.50"))]),
+        BANK_DISPLAY,
+    )
+    table = body["tables"][0]
+    assert table["rows"][0]["status"] == "Finished, not paid"
+    labels = {c["key"]: c["label"] for c in table["columns"]}
+    assert labels["a11"] == "Average salary"
+    balance = next(c for c in table["columns"] if c["key"] == "balance")
+    assert balance["type"] == "currency" and balance["currency"] == "CZK"
+
+
+def test_summary_uses_the_translated_value() -> None:
+    body = to_response(
+        Answer(question="q", sql="SELECT ...", columns=["kind"], rows=[("VYDAJ",)]),
+        BANK_DISPLAY,
+    )
+    assert "Debit (money out)" in body["message"]
+    assert "VYDAJ" not in body["message"]
+
+
+def test_money_kpi_carries_the_currency() -> None:
+    body = to_response(
+        Answer(question="q", sql="SELECT ...", columns=["total_amount"], rows=[(Decimal("5000"),)]),
+        BANK_DISPLAY,
+    )
+    assert body["kpis"][0]["currency"] == "CZK"
+
+
+def test_without_display_nothing_changes() -> None:
+    body = to_response(Answer(question="q", sql="SELECT ...", columns=["status"], rows=[("B",)]))
+    assert body["tables"][0]["rows"][0]["status"] == "B"
+    assert "currency" not in body["tables"][0]["columns"][0]
+
+
+def test_header_words_count_for_money() -> None:
+    """a11 has no money word in its name, but its header is Average salary."""
+    body = to_response(
+        Answer(question="q", sql="SELECT ...", columns=["a11"], rows=[(12541,)]),
+        BANK_DISPLAY,
+    )
+    assert body["tables"][0]["columns"][0]["type"] == "currency"
+    assert body["kpis"][0]["currency"] == "CZK"
