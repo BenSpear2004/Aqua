@@ -35,7 +35,7 @@ The server runs the app with docker-compose. Code changes are made locally, push
 | Frontend | React 19 with Vite, port 5173, proxies `/api` to the backend |
 | Database | PostgreSQL on Tiger Cloud free service (TimescaleDB, pgvector, pgvectorscale) |
 | Sample data | Pagila (Postgres port of Sakila) |
-| LLM | Gemini API via the `google-genai` SDK, keys from Google AI Studio, model name read from env |
+| LLM | Ollama (`qwen3:8b`) by default, on Ben's server over Tailscale; Gemini API via the `google-genai` SDK as a backup. Model names read from env |
 | Embeddings | Gemini embeddings stored in pgvector (Phase 4) |
 | SQL parsing and validation | `sqlglot`, Postgres dialect |
 | DB driver | `psycopg` 3 |
@@ -49,11 +49,11 @@ Gemini cannot be fine-tuned through the free API, which is why fine-tuning targe
 
 ### Model choice
 
-No model name is hardcoded. `GEMINI_MODEL` and `GEMINI_EMBED_MODEL` come from `.env`, so switching models is a config change, not a code change. Use the strongest model the free AI Studio quota allows for evaluation runs, and a cheaper Flash or Gemma model for day-to-day development so quota is not burned. List the models a key can use with `client.models.list()`. Record each model change and its eval result in `docs/decisions.md`.
+No model name is hardcoded. `OLLAMA_MODEL` (default `qwen3:8b`) and, for the backup, `GEMINI_MODEL` and `GEMINI_EMBED_MODEL` come from `.env`, so switching models is a config change, not a code change. `OLLAMA_THINK` turns the model's reasoning step on or off; it is on by default because it was more accurate in testing. Gemini's free tier was too limited to be the default (see `docs/decisions.md`), so use it as a backup and keep it out of pytest. Record each model change and its eval result in `docs/decisions.md`.
 
 ### Ollama
 
-`backend/main.py` currently calls Ollama. That is starter code. Phase 2 replaces it with the Gemini pipeline. Ollama comes back only in the fine-tuning phase, behind the same `llm.py` interface, so the rest of the pipeline does not change when the model provider does.
+Ollama is the default model provider. `nl2sql/llm.py` calls it with a JSON schema so the reply is only `{"sql": ...}`, Qwen's recommended sampling settings, a fixed seed, and a 16k context. The raw Ollama call in `backend/main.py` is starter code; Phase 2 replaces it with `nl2sql.pipeline`. Gemini will sit behind the same `llm.py` interface as a backup, as will a fine-tuned model later, so the rest of the pipeline does not change when the provider does.
 
 ## Repository layout
 
@@ -74,7 +74,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   │   ├── config.py         Loads env, exposes typed settings
 │   │   ├── db.py             Connection as the read-only role
 │   │   ├── schema.py         Introspects tables, columns, keys into text for prompts
-│   │   ├── llm.py            Thin model wrapper; the only file that imports google-genai
+│   │   ├── llm.py            Thin model wrapper; the only file that calls a model (Ollama, Gemini backup)
 │   │   ├── prompt.py         Builds the prompt from question + schema + examples
 │   │   ├── validate.py       AST safety checks (layer 1)
 │   │   ├── execute.py        Runs validated SQL in a read-only transaction
@@ -96,7 +96,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   ├── README.md             How to rebuild the database from scratch
 │   ├── 01_extensions.sql     vector, vectorscale
 │   ├── 02_load_pagila.sh     Loads Pagila, strips OWNER TO lines
-│   ├── 03_users.sql          Creates nl2sql_reader (password passed as a psql variable)
+│   ├── 03_users.sql          Creates nl2sql_reader (psql prompts for the password)
 │   └── 04_retrieval.sql      Example-query and schema-embedding tables (Phase 4)
 ├── eval/
 │   ├── datasets/             Question and gold-SQL pairs (JSONL)
@@ -126,7 +126,7 @@ When validation fails, `/api/query` returns HTTP 200 with `error` set and `rows`
 
 1. Receive a question.
 2. Build context: schema text (Phase 2), later the retrieved relevant tables and similar example queries (Phase 4).
-3. Ask Gemini for one SQL statement.
+3. Ask the model (Ollama by default, Gemini as backup) for one SQL statement.
 4. Validate the SQL with `validate.py`. On failure, return the reason; never execute.
 5. Execute in a read-only transaction with a row limit and timeout.
 6. Summarize the rows.
@@ -155,6 +155,9 @@ The admin account (`tsdbadmin`) must never appear in app code, `.env`, docker-co
 ## Environment variables
 
 ```
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen3:8b
+OLLAMA_THINK=true
 GEMINI_API_KEY=
 GEMINI_MODEL=
 GEMINI_EMBED_MODEL=
@@ -169,7 +172,7 @@ Read them only through `backend/nl2sql/config.py`. docker-compose passes `.env` 
 |---|---|---|
 | 0 | Repo scaffolding | Layout above exists, CI runs pytest and black |
 | 1 | Database | Pagila loaded, reader role works, write test fails as expected |
-| 2 | Baseline pipeline | `/api/query` returns validated SQL and rows; full schema in prompt; Ollama call removed |
+| 2 | Baseline pipeline | `/api/query` returns validated SQL and rows; full schema in prompt; starter Ollama call in `main.py` replaced by `nl2sql.pipeline` |
 | 3 | Evaluation harness | Execution accuracy reported on a fixed question set |
 | 4 | Retrieval layer | Relevant tables and examples retrieved per question; accuracy compared to Phase 3 |
 | 5 | Validation hardening | Adversarial test suite passes |
