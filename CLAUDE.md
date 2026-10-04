@@ -53,7 +53,7 @@ No model name is hardcoded. `OLLAMA_MODEL` (default `qwen3:8b`) and, for the bac
 
 ### Ollama
 
-Ollama is the default model provider. `nl2sql/llm.py` calls it with a JSON schema so the reply is only `{"sql": ...}`, Qwen's recommended sampling settings, a fixed seed, and a 16k context. The raw Ollama call in `backend/main.py` is starter code; Phase 2 replaces it with `nl2sql.pipeline`. Gemini will sit behind the same `llm.py` interface as a backup, as will a fine-tuned model later, so the rest of the pipeline does not change when the provider does.
+Ollama is the default model provider. `nl2sql/llm.py` calls it with a JSON schema so the reply is only `{"sql": ...}`, Qwen's recommended sampling settings, a fixed seed, and a 16k context. The Gemini API sits behind the same `complete()` call: `LLM_PROVIDER` sets the server default, and `/api/query` can pick `"ollama"` or `"gemini"` per request. Gemini gets the same rules as a system instruction and the same JSON schema. Gemma models take neither, so for them the rules go in the prompt and the SQL is read from a code fence. A fine-tuned model can be added the same way later, so the rest of the pipeline does not change when the provider does.
 
 ## Repository layout
 
@@ -121,9 +121,10 @@ The frontend talks to the backend only through `/api`. Keep these shapes stable;
 | Route | Purpose |
 |---|---|
 | `GET /api/health` | Liveness for the Docker healthcheck: `status`, `database_configured`, `model`, `retrieval`. Never touches the database or model |
-| `POST /api/query` | Body `{"question": str}`. Returns `{"status": "success" or "error", "sql": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
+| `GET /api/models` | `{"models": [{"id", "name", "description"}]}`, server default first. Lists `gemini` only when `GEMINI_API_KEY` is set |
+| `POST /api/query` | Body `{"question": str, "model": "ollama" or "gemini" (optional)}`. Returns `{"status": "success" or "error", "sql": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
 
-The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. `message` is a rule-based summary from `summarize.py`. `visualizations` and `kpis` come from `visualize.py`: a single number gives one KPI (`{"id", "label", "value", "type"}`) plus a `{"type": "kpi"}` visualization; labels with a measure give a `bar`, a date with a measure a `line`, each `{"id", "type", "title", "tableId": "result", "xKey", "yKey"}`; anything else leaves both empty. The frontend draws one x column, so a chart labelled by first and last name uses the first.
+The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. An unknown `model` is also a 422. Choosing `gemini` on a server with no key returns 400 with code `model_not_configured` and `retryable` false. `message` is a rule-based summary from `summarize.py`. `visualizations` and `kpis` come from `visualize.py`: a single number gives one KPI (`{"id", "label", "value", "type"}`) plus a `{"type": "kpi"}` visualization; labels with a measure give a `bar`, a date with a measure a `line`, each `{"id", "type", "title", "tableId": "result", "xKey", "yKey"}`; anything else leaves both empty. The frontend draws one x column, so a chart labelled by first and last name uses the first.
 
 Charts use the existing `visualizations` and `kpis` fields described above; there is no separate `chart` field. Ben owns `visualize.py` and decides any change to how charts are chosen or shaped.
 
@@ -167,6 +168,7 @@ The offline embedding indexer connects as `nl2sql_indexer` through `INDEXER_DATA
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3:8b
 OLLAMA_THINK=true
+LLM_PROVIDER=ollama
 GEMINI_API_KEY=
 GEMINI_MODEL=gemma-4-31b-it
 GEMINI_EMBED_MODEL=gemini-embedding-2
