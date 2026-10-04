@@ -1,11 +1,13 @@
 import { createMockResponse } from "./mockResponses.js";
 import { DEFAULT_MODEL_ID } from "./aiModels.js";
 
+// Sidebar shortcuts. Each prompt is worded exactly as tested against the
+// bank database, where it answered correctly on the first try.
 export const FAQS = [
-  { id: "largest-expenses", title: "What are my largest expenses?", prompt: "What were my largest expense categories?" },
-  { id: "cash-flow-change", title: "How has cash flow changed?", prompt: "Show the monthly cash flow trend." },
-  { id: "category-increase", title: "Which costs should I review?", prompt: "Explain in detail which expense categories I should review." },
-  { id: "recurring-expenses", title: "Review recurring expenses", prompt: "Show a table of recurring expenses by category." }
+  { id: "loans-in-debt", title: "Loans currently in debt", prompt: "How many loans are currently in debt?" },
+  { id: "loan-amount-by-status", title: "Loan amounts by status", prompt: "What is the average loan amount for each loan status?" },
+  { id: "top-salary-districts", title: "Top districts by salary", prompt: "Which 5 districts have the highest average salary?" },
+  { id: "accounts-per-year", title: "Accounts opened per year", prompt: "How many accounts were opened each year?" }
 ];
 
 // Navigation stores references to conversation records, never a second message list.

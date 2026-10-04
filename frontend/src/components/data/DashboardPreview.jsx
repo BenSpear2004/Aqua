@@ -12,20 +12,9 @@ import {
   XAxis,
   YAxis
 } from "recharts";
+import { formatMetric } from "./financialValues.js";
 
 const chartColors = ["#55dcf6", "#629dff", "#a1eaff"];
-
-function formatValue(value, type) {
-  if (type === "currency") {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      maximumFractionDigits: 0
-    }).format(value);
-  }
-  if (type === "percentage") return `${value}%`;
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
-}
 
 function KpiCards({ kpis }) {
   return (
@@ -33,7 +22,7 @@ function KpiCards({ kpis }) {
       {kpis.map((kpi) => (
         <article className="kpi-card" key={kpi.id}>
           <span>{kpi.label}</span>
-          <strong>{formatValue(kpi.value, kpi.type)}</strong>
+          <strong>{formatMetric(kpi.value, kpi.type, kpi.currency)}</strong>
           {typeof kpi.change === "number" && (
             <small className={kpi.direction === "down" ? "kpi-card__change kpi-card__change--down" : "kpi-card__change"}>
               {kpi.direction === "down" ? "↓" : "↑"} {Math.abs(kpi.change)}% period over period
@@ -46,7 +35,9 @@ function KpiCards({ kpis }) {
 }
 
 function Chart({ descriptor, table, width, height }) {
-  const columnType = table.columns.find((column) => column.key === descriptor.yKey)?.type;
+  const yColumn = table.columns.find((column) => column.key === descriptor.yKey);
+  const columnType = yColumn?.type;
+  const currency = yColumn?.currency || table.currency;
   const xType = table.columns.find((column) => column.key === descriptor.xKey)?.type;
   const common = {
     width,
@@ -64,13 +55,13 @@ function Chart({ descriptor, table, width, height }) {
         tickLine={false}
         axisLine={false}
         width={76}
-        tickFormatter={(value) => formatValue(value, columnType)}
+        tickFormatter={(value) => formatMetric(value, columnType, currency)}
       />,
       <Tooltip
         key="tooltip"
         contentStyle={{ background: "#0b2031", border: "1px solid rgba(120,220,255,.24)", borderRadius: 12 }}
         labelStyle={{ color: "#e7f7ff" }}
-        formatter={(value) => [formatValue(value, columnType), table.columns.find((column) => column.key === descriptor.yKey)?.label || descriptor.yKey]}
+        formatter={(value) => [formatMetric(value, columnType, currency), yColumn?.label || descriptor.yKey]}
       />
   ];
   const color = chartColors[0];

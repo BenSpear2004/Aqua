@@ -206,7 +206,7 @@ try {
     await waitFor("!document.querySelector('[role=menu]')");
     check("Tab dismisses model menu and continues to navigation",await evaluate("document.activeElement.classList.contains('sidebar-ask')"));
     await clickText("What are my largest expenses?");
-    check("FAQ fills and focuses composer", await evaluate("document.querySelector('textarea').value.includes('largest') && document.activeElement.tagName === 'TEXTAREA'"));
+    check("FAQ fills and focuses composer", await evaluate("document.querySelector('textarea').value.includes('loans') && document.activeElement.tagName === 'TEXTAREA'"));
     await evaluate(`window.birthFrames=[]; window.bubbleFrames=[]; window.birthStarted=performance.now(); window.rafCount=0;
       window.rafSampler=()=>{window.rafCount++; if(window.rafCount<300)requestAnimationFrame(window.rafSampler)}; requestAnimationFrame(window.rafSampler);
       window.birthSampler=setInterval(()=>{const p=document.querySelector('.message-birth__body');
@@ -337,7 +337,7 @@ try {
     check("model selection survives drawer remount",await evaluate("document.querySelector('.model-selector__name').textContent==='Qwen3 4B'"));
     await clickText("What are my largest expenses?");
     await waitFor("!document.querySelector('[role=dialog]') && document.activeElement.tagName==='TEXTAREA'");
-    check("mobile FAQ focuses populated composer",await evaluate("document.querySelector('textarea').value.includes('largest')"));
+    check("mobile FAQ focuses populated composer",await evaluate("document.querySelector('textarea').value.includes('loans')"));
     await screenshot("mobile-results");
     await evaluate("document.querySelector('.sidebar-trigger').click()");
     await clickText("Expense Analysis");

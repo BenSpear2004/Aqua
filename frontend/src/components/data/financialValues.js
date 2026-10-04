@@ -34,3 +34,16 @@ export function createCsv(table, rows = table.rows) {
     ...rows.map((row) => table.columns.map((column) => safeCsvCell(row[column.key])).join(","))
   ].join("\r\n")}`;
 }
+
+// One headline number: a KPI card, a chart axis, a tooltip. Whole units,
+// since an axis does not need cents. Uses the currency the response names
+// (CZK for the bank), dollars when it names none.
+export function formatMetric(value, type, currency) {
+  if (type === "currency") {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency", currency: currency || "USD", maximumFractionDigits: 0
+    }).format(value);
+  }
+  if (type === "percentage") return `${value}%`;
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
+}
