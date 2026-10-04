@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createInitialChatState, PROJECTS } from "../src/mocks/navigation.js";
-import { sendMessage, retryMessage } from "../src/services/aquaClient.js";
+import { sendMessage, retryMessage } from "../src/services/mockClient.js";
 
 test("project folders reference the same distinct centralized conversations", () => {
   const state = createInitialChatState();

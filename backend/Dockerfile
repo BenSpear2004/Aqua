@@ -12,4 +12,6 @@ COPY --chown=appuser:appuser main.py .
 COPY --chown=appuser:appuser nl2sql ./nl2sql
 USER appuser
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 127.0.0.1 only: the public reaches the API through nginx, which adds
+# the rate limit. Commands on the server itself still use localhost:8000.
+CMD ["uvicorn", "main:app", "--host", "127.0.0.1", "--port", "8000"]

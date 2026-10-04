@@ -103,3 +103,10 @@ def test_empty_reply_reports_why() -> None:
 
 def test_ollama_is_still_the_default() -> None:
     assert Settings().llm_provider == "ollama"
+
+
+def test_automatic_function_calling_is_off() -> None:
+    """No tools are sent, so it only added a warning to every call."""
+    client = FakeGenai()
+    complete("q", SETTINGS, client=client)
+    assert client.requests[0]["config"].automatic_function_calling.disable is True

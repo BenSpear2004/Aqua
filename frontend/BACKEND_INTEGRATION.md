@@ -1,10 +1,10 @@
 # AQUA frontend integration
 
-The UI currently runs entirely on local mock responses. It makes no backend requests.
+The UI talks to the real backend: questions go to `POST /api/query` and the model menu comes from `GET /api/models`. Set `VITE_AQUA_USE_MOCK=true` to run on the local mock responses instead, for UI work without the backend.
 
-## Replacement point
+## Client boundary
 
-Replace the mock internals in `src/services/aquaClient.js`. The UI calls:
+`src/services/aquaClient.js` is the only module components call. It hands requests to `apiClient.js` (the real transport) or `mockClient.js` (the mock). The UI calls:
 
 ```js
 sendMessage({ prompt, conversationId, requestId, modelId, signal, onFirstContent, onContent })
@@ -13,13 +13,19 @@ retryMessage({ prompt, conversationId, requestId, modelId, signal, onFirstConten
 
 Both return a promise resolving to the response object below. Only `prompt` is required; the original Promise-only call remains supported. Optional cumulative-text callbacks receive `(fragment, { conversationId, requestId, modelId })`; `modelId` is omitted when not supplied. Keep transport, endpoint selection, cancellation, and error normalization inside this client; presentation components should not need API-specific changes.
 
-For a future deployment, centralize the API origin in `VITE_AQUA_API_BASE_URL`. When unset, the existing Vite `/api` proxy can be used in development. This variable is configuration, not a place for secrets. Never put provider credentials in frontend code.
+`VITE_AQUA_API_BASE_URL` points at a backend on another origin. Unset, requests go to `/api` on the page's own origin, which the Vite dev proxy forwards in development and nginx forwards in production. This variable is configuration, not a place for secrets. Never put provider credentials in frontend code.
+
+The real backend does not stream: the callbacks are not called, and the promise resolves with the complete answer, which can take 20 to 80 seconds. A retry sends the same question again.
 
 ## Request
 
+The UI's `prompt` becomes the backend's `question`, and the selected model id becomes `model`:
+
 ```json
-{ "prompt": "What was our largest expense category?" }
+{ "question": "What are the top 3 film categories by total payment revenue?", "model": "gemini" }
 ```
+
+Every response also carries `sql`, the query that produced the answer (or that was refused). The UI shows it under the answer.
 
 ## Success response
 
@@ -70,6 +76,8 @@ Visualization types are allowlisted: `bar`, `line`, `area`, and `kpi`. Chart des
 
 ## Errors and no data
 
+`apiClient.js` turns transport problems into the same error shape: HTTP 429 (more than 10 questions a minute) becomes a retryable `rate_limited` error, 422 becomes a non-retryable `invalid_question` error, and a network failure or a non-JSON proxy page becomes a retryable `unavailable` error. Refused SQL (`rejected`, `query_failed`) keeps the backend's reason after a plain-language sentence, and keeps `sql` so the UI can show what was not run.
+
 Return normalized, user-safe errors:
 
 ```json
@@ -101,9 +109,7 @@ The JSON request example above is the minimal public request. Conversation/reque
 
 ## AI model selection
 
-The sidebar header uses a keyboard-accessible menu for model selection. `src/mocks/aiModels.js` holds the temporary names and stable IDs (`Qwen3 8B` / `Qwen3 4B`), which will be populated later. `useChat.js` owns the selected ID in session memory so desktop and mobile navigation share it, including after starting or switching conversations. Each new request records its model ID on the request and messages and passes it to `aquaClient.js`. Mock replies remain scenario-based and do not run either model.
-
-When model discovery is connected, replace the temporary catalog through the client boundary and validate the selected ID against the server's available models. The current Python query endpoint accepts `question` and chooses its model from server configuration; selectable backend routing is not implemented by this frontend change. Map frontend `prompt` to the agreed request shape and coordinate model routing before sending `modelId` to a real endpoint.
+The sidebar header uses a keyboard-accessible menu for model selection. On load, `useChat.js` asks `GET /api/models` for the models the server can run (server default first) and selects the default unless the current choice is on the list. Until that answers, or if it fails, `src/mocks/aiModels.js` supplies the same ids (`gemini`, `ollama`). The selected id is kept in session memory so desktop and mobile navigation share it, recorded on each request and message, and sent as `model`. Mock replies remain scenario-based and do not run either model.
 
 ## Financial values and exports
 
@@ -127,8 +133,14 @@ Above 900px, the composer keeps its 640px width and uses slightly taller vertica
 
 Run `npm --prefix frontend run build` and `node --test frontend/checks/*.test.mjs`. With the existing local preview on `http://127.0.0.1:5173`, `node frontend/checks/browser-review.mjs` uses installed Windows Chrome and Node's native DevTools connection; it adds no dependency. It reviews 1440×900, 1024×768, and 390×844, writes screenshots and sampled birth/pop timelines to the temporary `aqua-frontend-review` directory, and exercises navigation, structured results, exports, keyboard behavior, motion preferences, interruptions, and context-loss fallbacks. Optional `--missing-models` and `--no-webgl` modes deliberately inject asset/graphics failures; expected handled diagnostics in those modes do not imply normal-session runtime errors.
 
-Three.js and the roughly 6.3 MB of active GLBs remain the principal download/rendering costs. The static fallback logo is approximately 2.1 MB uncompressed (336 KB gzip). Software-only WebGL can stutter; browser screenshots and functional checks do not establish frame-rate guarantees or final human visual approval. No Docker, Vite proxy, backend, server, or deployment changes are needed for this handoff.
+Three.js and the roughly 6.3 MB of active GLBs remain the principal download/rendering costs. The static fallback logo is approximately 2.1 MB uncompressed (336 KB gzip). Software-only WebGL can stutter; browser screenshots and functional checks do not establish frame-rate guarantees or final human visual approval.
+
+`npm test` runs every `checks/*.test.mjs` suite, including the real client's tests against a stand-in `fetch`. `browser-review.mjs` exercises scripted mock scenarios, so run the preview with `VITE_AQUA_USE_MOCK=true` for it.
+
+## Production
+
+The frontend image builds the site (`npm ci`, `vite build`) and serves `dist/` with nginx on port 5173 (`nginx.conf`). nginx forwards `/api` to the backend on 127.0.0.1:8000, waits up to 300 seconds for an answer, limits each visitor to 10 questions a minute, and caches hashed assets for a year while never caching `index.html`. `npm run dev` is for local work only.
 
 ## Frontend touch points
 
-Backend integration should primarily change `src/services/aquaClient.js` and, if the contract changes, this document and response validation near that boundary. `src/hooks/useChat.js` may need a small update for streaming lifecycle. The chat, logo, message presentation, table, chart, and styling components should not need API-specific redesign or direct fetch calls.
+API changes belong in `src/services/apiClient.js` and, if the contract changes, this document and `CLAUDE.md`. The chat, logo, message presentation, table, chart, and styling components should not need API-specific redesign or direct fetch calls.

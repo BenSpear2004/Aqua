@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FAQS, PROJECTS, createInitialChatState } from "../mocks/navigation.js";
 import { AI_MODELS } from "../mocks/aiModels.js";
-import { retryMessage as retryRequest, sendMessage } from "../services/aquaClient.js";
+import { listModels, retryMessage as retryRequest, sendMessage } from "../services/aquaClient.js";
 
 let nextId = 0;
 const createId = (kind) => `${kind}-${Date.now()}-${nextId++}`;
@@ -12,6 +12,8 @@ const unexpectedResponse = () => ({
 
 export function useChat() {
   const [state, setState] = useState(createInitialChatState);
+  // The built-in list until the server says which models it can run.
+  const [models, setModels] = useState(AI_MODELS);
   const stateRef = useRef(state);
   const requests = useRef(new Map());
   const mounted = useRef(true);
@@ -32,6 +34,20 @@ export function useChat() {
       requests.current.clear();
     };
   }, []);
+
+  // The server lists its default model first; select it unless the current
+  // choice is one the server can run.
+  useEffect(() => {
+    const controller = new AbortController();
+    listModels({ signal: controller.signal }).then((available) => {
+      if (!available.length) return;
+      setModels(available);
+      update((current) => available.some((model) => model.id === current.selectedModelId)
+        ? current
+        : { ...current, selectedModelId: available[0].id });
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [update]);
 
   const runRequest = useCallback(({ conversationId, requestId, modelId, prompt, replyId, userMessageId, retrying }) => {
     const controller = new AbortController();
@@ -146,9 +162,9 @@ export function useChat() {
   }, [update]);
 
   const setModelId = useCallback((modelId) => {
-    if (!AI_MODELS.some((model) => model.id === modelId)) return;
+    if (!models.some((model) => model.id === modelId)) return;
     update((current) => current.selectedModelId === modelId ? current : { ...current, selectedModelId: modelId });
-  }, [update]);
+  }, [models, update]);
 
   const toggleFolder = useCallback((id) => {
     update((current) => ({
@@ -168,7 +184,7 @@ export function useChat() {
     retry,
     conversations: state.conversations,
     activeConversationId: state.activeConversationId,
-    models: AI_MODELS,
+    models,
     selectedModelId: state.selectedModelId,
     setModelId,
     projects: PROJECTS,

@@ -7,6 +7,7 @@ From the repo root, with the backend's virtual environment active and
     python eval/run_eval.py --retrieval        # same questions, with retrieval
     python eval/run_eval.py --limit 5          # quick smoke run
     python eval/run_eval.py --ids t47          # rerun one question, e.g. after an outage
+    python eval/run_eval.py --model ollama     # compare against the other provider
     python eval/run_eval.py --check-gold       # run only the gold SQL, no model
 
 Each run writes eval/results/<time>-<mode>.jsonl (one line per question)
@@ -20,6 +21,7 @@ app, so the comparison is like for like.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import datetime as dt
 import json
 import sys
@@ -122,9 +124,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check-gold", action="store_true", help="run gold SQL only; no model calls"
     )
+    parser.add_argument(
+        "--model",
+        choices=["ollama", "gemini"],
+        help="provider to evaluate; default is LLM_PROVIDER from .env",
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings()
+    if args.model:
+        settings = replace(settings, llm_provider=args.model)
     schema = get_schema(settings)
     items = load(args.dataset, args.split)
     if args.ids:
@@ -141,9 +150,14 @@ def main(argv: list[str] | None = None) -> int:
         retriever = VectorRetriever(settings)
 
     mode = "retrieval" if args.retrieval else "baseline"
+    model = (
+        settings.gemini_model
+        if settings.llm_provider == "gemini"
+        else settings.ollama_model
+    )
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     RESULTS.mkdir(parents=True, exist_ok=True)
-    out = RESULTS / f"{stamp}-{mode}.jsonl"
+    out = RESULTS / f"{stamp}-{mode}-{model.replace(':', '-')}.jsonl"
     records = []
     with out.open("w", encoding="utf-8") as handle:
         for number, item in enumerate(items, start=1):
@@ -156,7 +170,8 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = summarize_run(records) | {
         "mode": mode,
-        "model": settings.ollama_model,
+        "provider": settings.llm_provider,
+        "model": model,
         "dataset": args.dataset.name,
         "split": args.split,
     }
