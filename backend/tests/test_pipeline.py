@@ -38,7 +38,13 @@ def fake_model(monkeypatch: pytest.MonkeyPatch, *replies: str) -> list[dict]:
     queue = list(replies)
 
     def fake_generate(
-        question, schema, settings, client=None, examples=(), previous=None
+        question,
+        schema,
+        settings,
+        client=None,
+        examples=(),
+        previous=None,
+        size=None,
     ):
         calls.append(
             {
@@ -46,6 +52,7 @@ def fake_model(monkeypatch: pytest.MonkeyPatch, *replies: str) -> list[dict]:
                 "schema": schema,
                 "examples": examples,
                 "previous": previous,
+                "size": size,
             }
         )
         return Generation(
@@ -256,3 +263,53 @@ def test_service_outages_are_raised_not_hidden(
 def test_empty_question_is_refused() -> None:
     with pytest.raises(ValueError):
         answer_question("   ", SETTINGS, SCHEMA)
+
+
+# ---- answer size (answer_size.py) ----
+
+
+def test_plural_ranking_questions_ask_the_model_for_ten_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = fake_model(monkeypatch, "SELECT title FROM film")
+    fake_database(monkeypatch, OK)
+
+    answer = answer_question("What are the least popular films?", SETTINGS, SCHEMA)
+
+    assert "Return the top 10" in calls[0]["size"]
+    assert answer.size.kind == "list" and answer.size.rows == 10
+
+
+def test_singular_ranking_questions_ask_for_ties(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_model(monkeypatch, "SELECT title FROM film")
+    fake_database(monkeypatch, OK)
+    answer_question("What is the least popular film?", SETTINGS, SCHEMA)
+    assert "every tied row" in calls[0]["size"]
+
+
+def test_questions_without_ranking_get_no_size_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_model(monkeypatch, "SELECT count(*) AS films FROM film")
+    fake_database(monkeypatch, OK)
+    answer_question("How many films are there?", SETTINGS, SCHEMA)
+    assert calls[0]["size"] is None
+
+
+def test_size_rules_can_be_switched_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    calls = fake_model(monkeypatch, "SELECT title FROM film")
+    fake_database(monkeypatch, OK)
+    answer = answer_question(
+        "What are the least popular films?",
+        replace(SETTINGS, answer_size_rules=False),
+        SCHEMA,
+    )
+    assert calls[0]["size"] is None and answer.size.kind == "open"
+
+
+def test_the_size_line_survives_a_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_model(monkeypatch, "SELECT nope FROM film", "SELECT title FROM film")
+    fake_database(monkeypatch, QueryError('column "nope" does not exist'), OK)
+    answer_question("top 5 films", SETTINGS, SCHEMA)
+    assert calls[0]["size"] == calls[1]["size"]
+    assert "exactly 5 rows" in calls[1]["size"]

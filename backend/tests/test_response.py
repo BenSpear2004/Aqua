@@ -209,3 +209,36 @@ def test_header_words_count_for_money() -> None:
     )
     assert body["tables"][0]["columns"][0]["type"] == "currency"
     assert body["kpis"][0]["currency"] == "CZK"
+
+
+# ---- answer size notes ----
+
+
+def test_a_full_default_list_says_how_to_see_more() -> None:
+    from nl2sql.answer_size import AnswerSize
+
+    rows = [(f"FILM {i}", i) for i in range(10)]
+    body = to_response(answer(["title", "rentals"], rows, size=AnswerSize("list", 10)))
+    assert body["message"].endswith('Ask for a number, such as "top 25", to see more.')
+
+
+def test_a_short_default_list_needs_no_note() -> None:
+    from nl2sql.answer_size import AnswerSize
+
+    body = to_response(answer(["title", "rentals"], [("A", 1), ("B", 2)], size=AnswerSize("list", 10)))
+    assert "to see more" not in body["message"]
+
+
+def test_ties_for_first_place_are_explained() -> None:
+    from nl2sql.answer_size import AnswerSize
+
+    rows = [("A", 4), ("B", 4), ("C", 4)]
+    body = to_response(answer(["title", "rentals"], rows, size=AnswerSize("single")))
+    assert body["message"].endswith("3 rows are tied for first place.")
+
+
+def test_a_single_winner_gets_no_tie_note() -> None:
+    from nl2sql.answer_size import AnswerSize
+
+    body = to_response(answer(["title", "rentals"], [("A", 34)], size=AnswerSize("single")))
+    assert "tied" not in body["message"]

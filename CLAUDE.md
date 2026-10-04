@@ -86,6 +86,8 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   │   ├── summarize.py      Turns result rows into a short answer, by rule, no model call
 │   │   ├── visualize.py      Picks a chart for a result (first version; Ben owns it)
 │   │   ├── response.py       Answer -> the JSON the frontend renders
+│   │   ├── answer_size.py    How many rows a question asks for: a number, top 10, ties, per group
+│   │   ├── cache.py          Reuses recent successful answers to the same question and model
 │   │   ├── pipeline.py       context -> generate -> validate -> execute, one retry if fixable
 │   │   ├── retrieval/        Phase 4: embed.py (Gemini), store.py (offline indexer), select.py
 │   │   └── querylog.py       Phase 7, not built yet: logs questions, SQL, outcome
@@ -112,7 +114,8 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   ├── 04_retrieval.sql      retrieval schema, embedding tables, nl2sql_indexer role (Phase 4)
 │   └── 05_hide_columns.sql   Takes staff.password and staff.picture from the reader (Phase 5)
 ├── eval/
-│   ├── datasets/             pagila_v1.jsonl: 50 test and 25 train questions with gold SQL
+│   ├── datasets/             pagila_v1.jsonl: 50 test and 25 train questions with gold SQL;
+│   │                         pagila_size_v1.jsonl: 17 questions testing answer size rules
 │   ├── run_eval.py           Runs the pipeline over a dataset; --retrieval, --model, --fallback, --ids, --check-gold
 │   ├── metrics.py            Execution accuracy, validity rate, latency
 │   └── results/              Gitignored output
@@ -150,11 +153,13 @@ nginx answers 429 when one visitor sends more than 10 questions a minute (burst 
 
 1. Receive a question.
 2. Build context: every table from `schema.py`, or with `RETRIEVAL=on` the nearest tables plus similar verified examples. If retrieval fails, fall back to every table.
-3. Ask the model (Gemma 4 through the Gemini API by default, Ollama as backup) for one SQL statement.
+3. Ask the model (Gemma 4 through the Gemini API by default, Ollama as backup) for one SQL statement. With `ANSWER_SIZE_RULES=on`, `answer_size.py` adds one line saying how many rows the question wants: the number it gives, the top 10 for a plural with no number, first place and every tie for a singular, the same within each group for "in each", and no limit for "all".
 4. Validate the SQL with `validate.py` against the schema's allowlist. On failure, never execute.
 5. Execute in a read-only transaction with a row limit and timeout.
 6. If step 4 or 5 failed and the error is fixable (`UnsafeQueryError.fixable`, or a database error other than a timeout), ask the model once more with the failed SQL and the error. Writes, dangerous functions and catalog access are never retried.
-7. Summarize the rows, pick a chart, and return rows, summary, chart and SQL.
+7. Summarize the rows, pick a chart, and return rows, summary, chart and SQL. The summary says when the default top 10 was applied, or when several rows tie for first place.
+
+Before step 2, `main.py` checks `cache.py`: a successful answer to the same question (ignoring case, spacing and trailing punctuation) with the same model, retrieval and size settings is reused for `ANSWER_CACHE_SECONDS` (600 by default). Refusals, failures and outages are never cached.
 
 ## Safety rules (non-negotiable)
 
@@ -194,6 +199,8 @@ GEMINI_EMBED_MODEL=gemini-embedding-2
 DATABASE_URL=postgresql://nl2sql_reader:CHANGE_ME@HOST:PORT/tsdb?sslmode=require
 INDEXER_DATABASE_URL=postgresql://nl2sql_indexer:CHANGE_ME@HOST:PORT/tsdb?sslmode=require
 RETRIEVAL=off
+ANSWER_SIZE_RULES=on
+ANSWER_CACHE_SECONDS=600
 GOOGLE_CLIENT_ID=
 SESSION_SECRET=
 APP_ORIGIN=https://aqua-ai.us

@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from nl2sql.answer_size import AnswerSize, answer_size
 from nl2sql.config import Settings
 from nl2sql.execute import DEFAULT_MAX_ROWS, QueryError, execute
 from nl2sql.generate import Attempt, Example, generate_sql
@@ -71,6 +72,9 @@ class Answer:
     error_code: str | None = None
     attempts: int = 1
     used_retrieval: bool = False
+    # How many rows the question asked for (answer_size.py); the response
+    # says so when the default list size or a tie decided the answer.
+    size: AnswerSize = field(default_factory=lambda: AnswerSize("open"))
 
 
 def full_context(schema: Schema) -> Context:
@@ -115,6 +119,7 @@ def answer_question(
         raise ValueError("Question is empty.")
 
     context, used_retrieval = build_context(question, schema, retriever)
+    size = answer_size(question) if settings.answer_size_rules else AnswerSize("open")
     previous: Attempt | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         generation = generate_sql(
@@ -123,6 +128,7 @@ def answer_question(
             settings,
             examples=context.examples,
             previous=previous,
+            size=size.instruction,
         )
         base = {
             "question": question,
@@ -130,6 +136,7 @@ def answer_question(
             "model": generation.model,
             "attempts": attempt,
             "used_retrieval": used_retrieval,
+            "size": size,
         }
         try:
             query = validate_sql(generation.sql, allowed_tables=schema.allowed_tables)

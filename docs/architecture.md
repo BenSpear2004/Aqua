@@ -30,10 +30,11 @@ Both containers use the host's network. Only nginx listens on an outside-facing 
 
 | Step | Module | What it does |
 |---|---|---|
-| Receive | `main.py` | Validates the request body (1 to 2,000 characters, known model id) and picks the provider: the request's `model`, or `LLM_PROVIDER` |
+| Receive | `main.py`, `cache.py` | Returns a cached answer if the same question was answered with the same model and settings in the last 10 minutes (successes only). Otherwise Validates the request body (1 to 2,000 characters, known model id) and picks the provider: the request's `model`, or `LLM_PROVIDER` |
 | Schema | `schema.py` | Reads tables, columns, keys, enum and domain types from the database once per process, as the read-only role. Hides `staff.password` and `staff.picture`. Lists real values for short text columns (category names, languages) |
 | Context | `pipeline.py`, `retrieval/select.py` | Without retrieval: every table. With `RETRIEVAL=on`: embeds the question, takes the four nearest table descriptions, the tables the three nearest worked examples used, and any table that links two chosen ones. Falls back to every table if retrieval fails |
-| Generate | `generate.py`, `llm.py` | Builds the prompt (schema, examples, question, and on a retry the failed SQL and error) and asks the model for one SELECT |
+| Answer size | `answer_size.py` | Reads the question with plain rules: a number gives that many rows, a plural with no number the top 10, a singular first place plus every tie, "in each" the same per group, "all" no limit. Adds one line to the prompt; nothing for questions without a ranking |
+| Generate | `generate.py`, `llm.py` | Builds the prompt (schema, examples, question, answer size, and on a retry the failed SQL and error) and asks the model for one SELECT |
 | Validate | `validate.py` | Parses with sqlglot and walks the syntax tree. Rejects anything but one read-only SELECT on allowed tables. Marks each rejection fixable or not |
 | Execute | `execute.py`, `db.py` | Runs the parsed query with a row limit (1,000) in a read-only transaction as `nl2sql_reader` |
 | Retry | `pipeline.py` | If validation or execution failed for a fixable reason, asks the model once more with the error. Writes, dangerous functions, catalog access and timeouts are never retried |
@@ -108,6 +109,8 @@ React and Vite. `src/services/aquaClient.js` is the only module components call:
 | Model call | 180 seconds; Gemini gets 3 attempts on server errors, then Ollama | `llm.py` |
 | SQL statement | 10 seconds | `nl2sql_reader` role |
 | Rows returned | 1,000 | `execute.py` |
+| Rows for a plural ranking with no number | 10 | `answer_size.py` |
+| Reused answer lifetime | 600 seconds (`ANSWER_CACHE_SECONDS`) | `cache.py` |
 
 ### What a failure looks like
 
