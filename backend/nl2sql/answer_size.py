@@ -69,6 +69,15 @@ _COUNT_PATTERNS = [
     ),
 ]
 _ALL = re.compile(r"\b(?:all|every)\b")
+# "list customers by total spend", "show films ranked by rentals": a ranked
+# list without a ranking word. The measure must follow "by", so a grouping
+# like "rentals by store" is not mistaken for a ranking.
+_RANKED_BY = re.compile(
+    r"^(?:please\s+)?(?:list|show|give|rank|sort|order|display)\b.*?"
+    r"\b(?:ranked\s+|sorted\s+|ordered\s+)?by\s+(?:the\s+)?(?:\w+\s+)?"
+    r"(?:total|number|count|amount|average|sum|spend|spending|spent|revenue|"
+    r"sales|payments?|rentals?|balance|salary|value)\b"
+)
 # "for each store", "per category", "in every country": rank within groups.
 _PER_GROUP = re.compile(r"\b(?:each|per)\b|\b(?:for|in)\s+every\b")
 _PLURAL_VERB = re.compile(
@@ -142,8 +151,10 @@ class AnswerSize:
             return (
                 "Answer size: the question asks for several results without a "
                 f"number. Return the top {self.rows}: order by the value the "
-                f"question ranks by, include it as a column, and add LIMIT "
-                f"{self.rows}. Never answer with a single row."
+                "question ranks by, from highest to lowest (lowest first only "
+                "when it asks for the least, fewest, cheapest or lowest), "
+                f"include that value as a column, and add LIMIT {self.rows}. "
+                "Never answer with a single row."
             )
         if self.kind == "single":
             return (
@@ -260,6 +271,8 @@ def answer_size(question: str) -> AnswerSize:
     if _ALL.search(text):
         return AnswerSize("all")
     if ranking is None:
+        if _RANKED_BY.search(text):
+            return AnswerSize("list", DEFAULT_LIST_ROWS)
         return AnswerSize("open")
     if _wants_one(text, ranking):
         return AnswerSize("single")

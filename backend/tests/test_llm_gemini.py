@@ -122,8 +122,9 @@ def test_network_failures_become_llm_errors(error: Exception) -> None:
 
 def test_empty_reply_reports_why() -> None:
     client = FakeGenai(text=None, candidates=[SimpleNamespace(finish_reason="SAFETY")])
-    with pytest.raises(LLMError, match="SAFETY"):
-        complete("q", SETTINGS, client=client)
+    with pytest.raises(LLMError, match="SAFETY") as caught:
+        complete("q", NO_FALLBACK, client=client)
+    assert caught.value.transient is True  # another model may answer
 
 
 def test_ollama_is_still_the_default() -> None:
@@ -223,3 +224,154 @@ def test_retry_settings_cover_server_errors_but_not_quota() -> None:
     assert llm.GEMINI_ATTEMPTS == 3
     assert 500 in llm.GEMINI_RETRY_CODES and 503 in llm.GEMINI_RETRY_CODES
     assert 429 not in llm.GEMINI_RETRY_CODES  # retrying a spent quota spends more
+
+
+# ---- the Gemini model chain ----
+
+
+class PerModelGenai:
+    """Fails for the models in `down`, answers for the rest; records order."""
+
+    def __init__(self, down: dict[str, Exception]) -> None:
+        self.down = down
+        self.asked: list[str] = []
+        self.models = self
+
+    def generate_content(self, model, contents, config):
+        self.asked.append(model)
+        if model in self.down:
+            raise self.down[model]
+        return SimpleNamespace(
+            text="```sql\nSELECT 1\n```", candidates=[], model_version=model
+        )
+
+
+CHAIN = replace(
+    SETTINGS,
+    gemini_model="gemini-3.5-flash-lite",
+    gemini_fallback_models=("gemma-4-26b-a4b-it",),
+)
+
+
+def test_the_main_model_answers_when_it_can(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = ollama_answers(monkeypatch)
+    client = PerModelGenai({})
+    assert complete("q", CHAIN, client=client).model == "gemini-3.5-flash-lite"
+    assert client.asked == ["gemini-3.5-flash-lite"] and calls == []
+
+
+def ollama_down(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Ollama on Ben's machine is off; returns how often it was tried."""
+    from nl2sql import llm
+
+    tried = []
+
+    def broken(prompt, settings, system, json_schema, client):
+        tried.append(prompt)
+        raise LLMError("Cannot connect to Ollama")
+
+    monkeypatch.setattr(llm, "_complete_ollama", broken)
+    return tried
+
+
+@pytest.mark.parametrize("code", [429, 503])
+def test_a_spent_or_down_flash_model_hands_over_to_ollama(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    calls = ollama_answers(monkeypatch)
+    client = PerModelGenai({"gemini-3.5-flash-lite": api_error(code)})
+    reply = complete("q", CHAIN, client=client)
+    assert reply.model == "qwen3:8b" and len(calls) == 1
+    assert client.asked == ["gemini-3.5-flash-lite"]  # Gemma not needed
+
+
+def test_gemma_answers_when_flash_and_ollama_are_both_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tried = ollama_down(monkeypatch)
+    client = PerModelGenai({"gemini-3.5-flash-lite": api_error(429)})
+    reply = complete("q", CHAIN, client=client)
+    assert client.asked == ["gemini-3.5-flash-lite", "gemma-4-26b-a4b-it"]
+    assert reply.model == "gemma-4-26b-a4b-it" and len(tried) == 1
+
+
+def test_everything_down_reports_the_last_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ollama_down(monkeypatch)
+    client = PerModelGenai(
+        {"gemini-3.5-flash-lite": api_error(429), "gemma-4-26b-a4b-it": api_error(500)}
+    )
+    with pytest.raises(LLMError, match="HTTP 500"):
+        complete("q", CHAIN, client=client)
+
+
+def test_a_configuration_mistake_stops_the_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = ollama_answers(monkeypatch)
+    client = PerModelGenai({"gemini-3.5-flash-lite": api_error(404)})
+    with pytest.raises(LLMError, match="HTTP 404"):
+        complete("q", CHAIN, client=client)
+    assert client.asked == ["gemini-3.5-flash-lite"] and calls == []
+
+
+def test_without_fallback_only_the_main_model_is_tried() -> None:
+    """The eval measures one model, so it turns fallback off."""
+    client = PerModelGenai({"gemini-3.5-flash-lite": api_error(503)})
+    with pytest.raises(LLMError):
+        complete("q", replace(CHAIN, llm_fallback=False), client=client)
+    assert client.asked == ["gemini-3.5-flash-lite"]
+
+
+def test_gemma_in_the_chain_still_gets_the_rules_in_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ollama_down(monkeypatch)
+    client = PerModelGenai({"gemini-3.5-flash-lite": api_error(429)})
+    seen = {}
+    original = client.generate_content
+
+    def spy(model, contents, config):
+        seen[model] = (contents, config.system_instruction)
+        return original(model, contents, config)
+
+    client.generate_content = spy
+    complete(
+        "question", CHAIN, system="rules", json_schema=SQL_REPLY_SCHEMA, client=client
+    )
+    assert seen["gemini-3.5-flash-lite"] == ("question", "rules")
+    assert seen["gemma-4-26b-a4b-it"] == ("rules\n\nquestion", None)
+
+
+# ---- the order of the chain ----
+
+
+def test_chain_order_for_gemini_is_flash_then_ollama_then_gemma() -> None:
+    from nl2sql.llm import fallback_chain
+
+    assert fallback_chain(CHAIN) == [
+        ("gemini", "gemini-3.5-flash-lite"),
+        ("ollama", None),
+        ("gemini", "gemma-4-26b-a4b-it"),
+    ]
+
+
+def test_chain_order_when_ollama_is_chosen() -> None:
+    from nl2sql.llm import fallback_chain
+
+    assert fallback_chain(replace(CHAIN, llm_provider="ollama")) == [
+        ("ollama", None),
+        ("gemini", "gemini-3.5-flash-lite"),
+        ("gemini", "gemma-4-26b-a4b-it"),
+    ]
+
+
+def test_chain_without_a_key_or_fallback() -> None:
+    from nl2sql.llm import fallback_chain
+
+    no_key = replace(CHAIN, llm_provider="ollama", gemini_api_key="")
+    assert fallback_chain(no_key) == [("ollama", None)]
+    assert fallback_chain(replace(CHAIN, llm_fallback=False)) == [
+        ("gemini", "gemini-3.5-flash-lite")
+    ]

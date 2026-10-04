@@ -58,3 +58,16 @@ def no_answer_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from nl2sql.cache import AnswerCache
 
     monkeypatch.setattr(main, "ANSWER_CACHE", AnswerCache(0))
+
+
+@pytest.fixture(autouse=True)
+def no_real_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unit tests must never spend API quota (CLAUDE.md). Any code path
+    that builds a real Gemini client, for example a fallback step a test
+    forgot to stub, fails loudly instead of calling Google."""
+    from google import genai
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a test tried to create a real Gemini client")
+
+    monkeypatch.setattr(genai, "Client", refuse)
