@@ -83,6 +83,7 @@ export default function AquaMessage({ message, hidden = false, onRetry }) {
         <span className="status-mark" aria-label="AQUA response">AQUA</span>
         <div className="markdown-response">
           <ReactMarkdown>{response.message || ""}</ReactMarkdown>
+          {response.status === "stopped" && <p role="status">Response stopped.</p>}
         </div>
         <SqlBlock sql={response.sql} />
         {(response.tables?.length > 0 || response.visualizations?.length > 0 || response.kpis?.length > 0) && (
@@ -99,13 +100,13 @@ export default function AquaMessage({ message, hidden = false, onRetry }) {
             )}
           </div>
         )}
-        <div className="response-actions">
+        {(response.status !== "stopped" || response.message) && <div className="response-actions">
           <button type="button" className="text-action" onClick={copyResponse}>
             {copyStatus === "Response copied" ? "Copied" : "Copy response"}
           </button>
           <span className="action-feedback" role="status" aria-live="polite">{copyStatus}</span>
           {response.model && <span className="answered-by">Answered by {response.model}</span>}
-        </div>
+        </div>}
       </div>
     </article>
   );

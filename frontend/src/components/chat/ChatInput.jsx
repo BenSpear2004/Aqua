@@ -6,7 +6,7 @@ import "../aqua/model.css";
 const Chatbar3D = lazy(() => import("../aqua/Chatbar3D.jsx"));
 
 export default function ChatInput({
-  draft = "", onDraftChange, inputRef, focusRequest, onSend, pending, waiting = pending,
+  draft = "", onDraftChange, inputRef, focusRequest, onSend, onStop, pending, waiting = pending,
   active, originRef, effectKey, thinkingCancelled, disabled = false, disabledHint, maxQuestionLength = 10000,
 }) {
   const ownInputRef = useRef(null);
@@ -123,11 +123,13 @@ export default function ChatInput({
         <button
           className="send-button send-button--model"
           style={geometry?.button}
-          type="submit"
-          disabled={!canSend}
-          aria-label={pending ? "AQUA is processing your question" : "Send message"}
+          type={pending ? "button" : "submit"}
+          onClick={pending ? onStop : undefined}
+          disabled={pending ? disabled || !onStop : !canSend}
+          aria-label={pending ? "Stop response" : "Send message"}
+          title={pending ? "Stop response" : "Send message"}
         >
-          {pending ? <span className="send-spinner" aria-hidden="true" /> : (
+          {pending ? <span className="send-stop-icon" aria-hidden="true" /> : (
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M4.5 12h14M12.5 5.5 19 12l-6.5 6.5" />
             </svg>

@@ -34,6 +34,7 @@ function installFixtures() {
     state[`release${name}`] = () => resolve(finish());
     options.signal?.addEventListener("abort", () => {
       state[`${name.toLowerCase()}Aborted`] = true;
+      if (name === "Query" && state.ignoreQueryAbort) return;
       reject(new DOMException("Request cancelled", "AbortError"));
     }, { once: true });
   });
@@ -137,15 +138,19 @@ try {
     await waitFor("document.querySelector('[data-auth-state=signedout]') && document.querySelector('.google-signin-button button')");
     check("signed out has only the dedicated sign-in page", await evaluate("location.pathname === '/signin' && !document.querySelector('textarea,.sidebar-desktop,.sidebar-trigger,.message')"));
   };
-  const workspace = () => waitFor("location.pathname === '/' && document.querySelector('textarea:not(:disabled)') && document.body.innerText.includes('Review Reader')");
-  const send = async (prompt) => {
+  const workspace = () => waitFor("location.pathname === '/' && document.querySelector('.app-shell textarea:not(:disabled)')");
+  const send = async (prompt, viaEnter = false) => {
     await evaluate(`(() => {
       const input = document.querySelector('textarea');
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(input, ${JSON.stringify(prompt)});
       input.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
     await waitFor("!document.querySelector('.send-button').disabled");
-    await evaluate("document.querySelector('textarea').form.requestSubmit()");
+    if (viaEnter) {
+      await evaluate("document.querySelector('textarea').focus()");
+      await cdp("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+      await cdp("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 });
+    } else await evaluate("document.querySelector('textarea').form.requestSubmit()");
   };
 
   await cdp("Runtime.enable");
@@ -192,6 +197,29 @@ try {
   await loadDocument("Page.reload");
   await workspace();
   check("reload restores the session through the backend", await evaluate("__authReview.calls.some((call) => call.path === '/api/auth/me') && !__authReview.calls.some((call) => call.path === '/api/auth/google')"));
+  check("main-page logo has no visible tagline", await evaluate("!document.querySelector('.hero-copy') && !document.body.innerText.includes('Ask your financial data anything.')"));
+  for (const [width, height] of [[1440, 900], [390, 844]]) {
+    await cdp("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    await evaluate("__authReview.pauseQuery = true; __authReview.ignoreQueryAbort = true; __authReview.queryAborted = false");
+    await send(`Stop this response at ${width}`, true);
+    await waitFor("document.querySelector('.send-stop-icon') && __authReview.releaseQuery");
+    check(`${width}: Enter replaces send with an enabled stop button`, await evaluate("document.querySelector('.send-button').getAttribute('aria-label') === 'Stop response' && !document.querySelector('.send-button').disabled && document.querySelector('.send-button').getBoundingClientRect().height >= 44"));
+    await screenshot(`stop-button-${width}`);
+    await evaluate("window.__stoppedRequest = __authReview.releaseQuery");
+    await evaluate("document.querySelector('button[aria-label=\"Stop response\"]').click()");
+    await waitFor("!document.querySelector('.send-stop-icon,.processing-status,.thinking-bubbles')");
+    check(`${width}: stop aborts the request and restores the composer`, await evaluate("__authReview.queryAborted && document.body.innerText.includes('Response stopped.') && document.querySelector('.send-button').getAttribute('aria-label') === 'Send message' && document.activeElement === document.querySelector('textarea')"));
+    await send(`New question after stop at ${width}`);
+    await evaluate("window.__stoppedRequest()");
+    await sleep(150);
+    check(`${width}: late stopped response cannot complete the new request`, await evaluate("Boolean(document.querySelector('.send-stop-icon')) && !document.body.innerText.includes('Private review result')"));
+    await evaluate("__authReview.releaseQuery(); __authReview.pauseQuery = false; __authReview.ignoreQueryAbort = false");
+    await waitFor("!document.querySelector('.send-stop-icon') && document.body.innerText.includes('Private review result')");
+    await loadDocument("Page.reload");
+    await workspace();
+  }
+  await cdp("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  await waitFor("[...document.querySelectorAll('button')].some((button) => button.textContent.trim() === 'Sign out' && button.getBoundingClientRect().width > 0)");
   await send("Private state before logout");
   await waitFor("document.body.innerText.includes('Private review result')");
   await evaluate("__authReview.pauseQuery = true");
