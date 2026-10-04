@@ -14,15 +14,16 @@
 }
 
 .message-birth__body {
-  stroke: rgba(168, 237, 252, 0.56);
-  stroke-width: 1.1;
-  filter: drop-shadow(0 10px 12px rgba(0, 9, 18, 0.28));
+  stroke: rgba(190, 239, 247, 0.56);
+  stroke-width: 1;
+  filter: drop-shadow(0 10px 12px rgba(0, 9, 18, 0.2));
 }
 
 .message-birth--aqua .message-birth__body { stroke-opacity: 0.72; }
-.message-birth__reflection { stroke: rgba(218, 254, 255, 0.1); stroke-width: 3; }
-.message-birth__highlight { fill: none; stroke: rgba(231, 255, 255, 0.65); stroke-linecap: round; stroke-width: 1.3; }
-.message-birth__pressure { fill: rgba(118, 233, 251, 0.12); stroke: rgba(209, 255, 255, 0.48); stroke-width: 0.8; }
+.message-birth__reflection { stroke: rgba(218, 254, 255, 0.08); stroke-width: 2.5; }
+.message-birth__highlight { fill: none; stroke: rgba(231, 255, 255, 0.76); stroke-linecap: round; stroke-width: 1; }
+.message-birth__highlight--lower { stroke: rgba(153, 227, 243, 0.42); stroke-width: 1.5; }
+.message-birth__pressure { fill: rgba(118, 233, 251, 0.08); stroke: rgba(209, 255, 255, 0.48); stroke-width: 0.8; }
 
 /* The outer span moves. The independent body vanishes before its rim expands. */
 .thinking-bubbles {

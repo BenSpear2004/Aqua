@@ -34,8 +34,9 @@
   --radius-lg: 1.5rem;
   --radius-pill: 999px;
   --content-width: 960px;
+  --composer-width: 1040px;
   --message-width: 860px;
-  --sidebar-width: 266px;
+  --sidebar-width: 302px;
 
   --shadow-soft: 0 16px 52px rgba(0, 0, 0, 0.24);
   --shadow-glass: 0 18px 44px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.12);
