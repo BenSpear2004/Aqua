@@ -24,6 +24,12 @@ DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 DEFAULT_GEMINI_MODEL = "gemma-4-31b-it"
 DEFAULT_GEMINI_EMBED_MODEL = "gemini-embedding-2"
 
+# Where SQL generation runs. Ollama is the default; Gemini is the backup,
+# or the demo model when a paid key is set. The API can also pick one per
+# request.
+PROVIDERS = ("ollama", "gemini")
+DEFAULT_LLM_PROVIDER = "ollama"
+
 # The repo-root .env, two folders up from this file (backend/nl2sql/).
 # Inside the Docker image this path does not exist, which is fine:
 # docker-compose passes the same values in as environment variables.
@@ -55,10 +61,14 @@ class Settings:
     # The nl2sql_indexer connection, used only by the offline embedding
     # indexer (retrieval/store.py), never by the web app.
     indexer_database_url: str = field(default="", repr=False)
-    # Gemini API: embeddings for retrieval, and the free Gemma backup.
+    # Gemini API: embeddings for retrieval, and SQL generation when
+    # llm_provider is "gemini". gemma-4-31b-it is free; a paid key can
+    # use a Gemini model instead.
     gemini_api_key: str = field(default="", repr=False)
     gemini_model: str = DEFAULT_GEMINI_MODEL
     gemini_embed_model: str = DEFAULT_GEMINI_EMBED_MODEL
+    # Which provider llm.py sends prompts to: "ollama" or "gemini".
+    llm_provider: str = DEFAULT_LLM_PROVIDER
     # Retrieve relevant tables and examples per question (Phase 4). Off
     # until the indexer has run and the eval shows it helps.
     retrieval: bool = False
@@ -91,6 +101,12 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
             f"OLLAMA_BASE_URL must start with http:// or https://, got {base_url!r}."
         )
 
+    provider = get("LLM_PROVIDER").lower() or DEFAULT_LLM_PROVIDER
+    if provider not in PROVIDERS:
+        raise ConfigError(
+            f"LLM_PROVIDER must be one of {', '.join(PROVIDERS)}, got {provider!r}."
+        )
+
     think = get("OLLAMA_THINK")
     retrieval = get("RETRIEVAL")
     return Settings(
@@ -102,6 +118,7 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
         gemini_api_key=get("GEMINI_API_KEY"),
         gemini_model=get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL,
         gemini_embed_model=get("GEMINI_EMBED_MODEL") or DEFAULT_GEMINI_EMBED_MODEL,
+        llm_provider=provider,
         retrieval=_flag("RETRIEVAL", retrieval) if retrieval else False,
     )
 
