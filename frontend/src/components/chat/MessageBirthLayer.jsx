@@ -42,8 +42,8 @@ function shapeAt(progress, origin, target, isAqua) {
     { at: 0.38, x: source.x, y: source.y - inflatedHeight - 6, width: inflatedWidth, height: inflatedHeight, radius: 44, neck: 22, base: 33 },
     { at: 0.58, x: mix(source.x, destination, 0.12), y: source.y - inflatedHeight - 42, width: Math.min(target.width, inflatedWidth * 1.25), height: inflatedHeight, radius: 38, neck: 10, base: 21 },
     { at: 0.67, x: mix(source.x, destination, 0.2), y: source.y - inflatedHeight - 60, width: Math.min(target.width, inflatedWidth * 1.32), height: inflatedHeight, radius: 33, neck: 0.65, base: 2 },
-    { at: 0.94, x: destination, y: target.top - 4, width: target.width, height: endHeight, radius: 22, neck: 0, base: 0 },
-    { at: 1, x: destination, y: target.top, width: target.width, height: endHeight, radius: 22, neck: 0, base: 0 }
+    { at: 0.94, x: destination, y: target.top - 4, width: target.width, height: endHeight, radius: 28, neck: 0, base: 0 },
+    { at: 1, x: destination, y: target.top, width: target.width, height: endHeight, radius: 28, neck: 0, base: 0 }
   ];
   const index = frames.findIndex((frame) => frame.at >= progress);
   const to = frames[Math.max(1, index)];
@@ -61,6 +61,7 @@ export default function MessageBirthLayer({ message, originRef, onComplete }) {
   const gradientId = useId().replace(/:/g, "");
   const pathsRef = useRef([]);
   const highlightRef = useRef(null);
+  const lowerHighlightRef = useRef(null);
   const pressureRef = useRef(null);
   const lifecycleRef = useRef(0);
   const onCompleteRef = useRef(onComplete);
@@ -124,6 +125,7 @@ export default function MessageBirthLayer({ message, originRef, onComplete }) {
       pathsRef.current.forEach((path) => path?.setAttribute("d", outline));
       const edge = Math.min(shape.radius, shape.height / 2);
       highlightRef.current?.setAttribute("d", `M ${shape.x - shape.width / 2 + edge * 0.65} ${shape.y + edge * 0.8} Q ${shape.x - shape.width / 2 + edge * 0.75} ${shape.y + 3} ${shape.x - shape.width / 2 + edge * 1.6} ${shape.y + 3} H ${shape.x + shape.width * 0.22}`);
+      lowerHighlightRef.current?.setAttribute("d", `M ${shape.x + shape.width * 0.08} ${shape.y + shape.height - 3} H ${shape.x + shape.width / 2 - edge} Q ${shape.x + shape.width / 2 - 3} ${shape.y + shape.height - 3} ${shape.x + shape.width / 2 - 3} ${shape.y + shape.height - edge}`);
       pressureRef.current?.setAttribute("cx", source.x);
       pressureRef.current?.setAttribute("cy", source.y);
       pressureRef.current?.setAttribute("rx", 36 + Math.sin(progress * Math.PI) * 20);
@@ -181,22 +183,26 @@ export default function MessageBirthLayer({ message, originRef, onComplete }) {
     <svg className={`message-birth${message.role === "aqua" ? " message-birth--aqua" : ""}`} aria-hidden="true">
       <defs>
         <linearGradient id={`${gradientId}-glass`} x1="0" y1="0" x2="0.32" y2="1">
-          <stop offset="0" stopColor="#d0faff" stopOpacity="0.44" />
-          <stop offset="0.12" stopColor="#66deef" stopOpacity="0.26" />
-          <stop offset="0.51" stopColor="#0c2d48" stopOpacity="0.68" />
-          <stop offset="0.88" stopColor="#143e58" stopOpacity="0.56" />
-          <stop offset="1" stopColor="#67d8eb" stopOpacity="0.34" />
+          <stop offset="0" stopColor="#e2fbff" stopOpacity="0.55" />
+          <stop offset="0.06" stopColor="#88cddc" stopOpacity="0.3" />
+          <stop offset="0.28" stopColor="#304d5b" stopOpacity="0.52" />
+          <stop offset="0.65" stopColor="#172e40" stopOpacity="0.54" />
+          <stop offset="0.93" stopColor="#4a94ae" stopOpacity="0.4" />
+          <stop offset="1" stopColor="#a2e6f1" stopOpacity="0.48" />
         </linearGradient>
-        <radialGradient id={`${gradientId}-reflection`} cx="0.18" cy="0.08" r="0.83">
-          <stop offset="0" stopColor="#efffff" stopOpacity="0.29" />
-          <stop offset="0.45" stopColor="#abefff" stopOpacity="0.02" />
-          <stop offset="1" stopColor="#68cae9" stopOpacity="0.13" />
+        <radialGradient id={`${gradientId}-reflection`} cx="0.2" cy="0.02" r="0.85">
+          <stop offset="0" stopColor="#f5ffff" stopOpacity="0.44" />
+          <stop offset="0.1" stopColor="#e3fbff" stopOpacity="0.22" />
+          <stop offset="0.34" stopColor="#abefff" stopOpacity="0" />
+          <stop offset="0.78" stopColor="#68cae9" stopOpacity="0.03" />
+          <stop offset="1" stopColor="#a6e9f5" stopOpacity="0.22" />
         </radialGradient>
       </defs>
       <ellipse ref={pressureRef} className="message-birth__pressure" ry="4" />
       <path ref={(node) => { pathsRef.current[0] = node; }} className="message-birth__body" fill={`url(#${gradientId}-glass)`} />
       <path ref={(node) => { pathsRef.current[1] = node; }} className="message-birth__reflection" fill={`url(#${gradientId}-reflection)`} />
       <path ref={highlightRef} className="message-birth__highlight" />
+      <path ref={lowerHighlightRef} className="message-birth__highlight message-birth__highlight--lower" />
     </svg>,
     document.body
   );

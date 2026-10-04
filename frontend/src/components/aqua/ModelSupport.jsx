@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useThree } from "@react-three/fiber";
-import { PMREMGenerator } from "three";
+import { Color, PMREMGenerator } from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 export { default as ModelErrorBoundary } from "./ModelErrorBoundary.jsx";
 
@@ -12,11 +12,16 @@ export function StudioReflections({ lowKey = false }) {
     if (lowKey) {
       const adjusted = new Set();
       room.traverse((object) => {
-        if (object.isPointLight) object.intensity *= 0.35;
+        if (object.isPointLight) object.intensity *= 0.5;
         if (!object.isMesh || adjusted.has(object.material)) return;
         adjusted.add(object.material);
-        if (object.material.isMeshBasicMaterial) object.material.color.multiplyScalar(0.18);
-        else object.material.color.set("#102b3d");
+        if (object.material.isMeshBasicMaterial) {
+          object.material.color.multiplyScalar(0.1);
+          if (object.position.y < 20) {
+            object.material.color.multiply(new Color("#c0e7ec"));
+            object.scale.y *= 0.65;
+          } else object.scale.z *= 0.45;
+        } else object.material.color.set("#214858");
       });
     }
     const generator = new PMREMGenerator(gl);
@@ -24,7 +29,7 @@ export function StudioReflections({ lowKey = false }) {
     const previous = scene.environment;
     const previousIntensity = scene.environmentIntensity;
     scene.environment = target.texture;
-    scene.environmentIntensity = lowKey ? 0.6 : 1;
+    scene.environmentIntensity = lowKey ? 0.72 : 1;
     room.dispose();
     generator.dispose();
     invalidate();

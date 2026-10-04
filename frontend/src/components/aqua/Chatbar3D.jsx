@@ -1,6 +1,6 @@
 import React, { Suspense, useEffect, useLayoutEffect, useMemo } from "react";
 import { Canvas, useLoader, useThree } from "@react-three/fiber";
-import { Box3, Mesh, MeshBasicMaterial, Vector3 } from "three";
+import { Box3, Color, FrontSide, Mesh, ShaderMaterial, Vector3 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import chatbarUrl from "../../assets/models/Chatbar.glb?url";
 import { ContextGuard, ModelErrorBoundary, StudioReflections } from "./ModelSupport.jsx";
@@ -12,6 +12,42 @@ const CONTROL_NODES = new Set([
   "AQUA_Send_Arrow_Head",
   "AQUA_Backdrop",
 ]);
+
+function createTransmissionReceiver() {
+  return new ShaderMaterial({
+    uniforms: {
+      upperTint: { value: new Color("#304d5b") },
+      lowerTint: { value: new Color("#172e40") },
+    },
+    vertexShader: `
+      varying vec3 receiverPosition;
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        receiverPosition = worldPosition.xyz;
+        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 upperTint;
+      uniform vec3 lowerTint;
+      varying vec3 receiverPosition;
+      void main() {
+        float across = smoothstep(-6.0, 6.0, receiverPosition.x);
+        float lower = smoothstep(-1.1, 1.1, receiverPosition.z);
+        vec2 lightDistance = vec2((receiverPosition.x + 2.2) / 5.0,
+                                  (receiverPosition.z + 0.5) / 1.5);
+        float light = exp(-dot(lightDistance, lightDistance));
+        vec3 tint = mix(upperTint, lowerTint, lower * 0.58 + across * 0.12);
+        tint += upperTint * light * 0.055;
+        // Keep the in-scene transmission sample partially transparent so the page
+        // illumination still shows through the canvas instead of becoming a solid fill.
+        gl_FragColor = vec4(tint, 0.78);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }
+    `,
+  });
+}
 
 function ChatbarModel({ onLayout, onReady }) {
   const gltf = useLoader(GLTFLoader, chatbarUrl);
@@ -37,22 +73,24 @@ function ChatbarModel({ onLayout, onReady }) {
     const shell = copy.getObjectByName("AQUA_Single_Clear_Glass_Body");
     const send = copy.getObjectByName("AQUA_Glass_Send_Button");
     if (!shell || !send) throw new Error("The supplied chat bar has no usable shell or send region.");
+    // This closed mesh needs only its outer faces. Double-sided transmission feeds
+    // its rear reflection into the bar and creates a bright patch above the arrow.
+    send.material.side = FrontSide;
     // WebGL transmission cannot sample the DOM underneath a transparent canvas. These
-    // inset optical receivers use the original asset geometry to provide navy depth
-    // inside the clear glass, rather than substituting another visible shell.
-    const depthMaterial = new MeshBasicMaterial({ color: "#092334" });
+    // inset receivers use original asset geometry with a softly lit aqua gradient.
+    // The outer GLB remains the visible glass and refracts this in-scene illumination.
+    const depthMaterial = createTransmissionReceiver();
     const depth = new Mesh(shell.geometry, depthMaterial);
     depth.name = "Browser_Transmission_Receiver";
     depth.scale.set(0.995, 0.22, 0.85);
     depth.position.y = -0.2;
     copy.add(depth);
-    const buttonDepthMaterial = new MeshBasicMaterial({ color: "#0d3547" });
-    const buttonDepth = new Mesh(send.geometry, buttonDepthMaterial);
+    const buttonDepth = new Mesh(send.geometry, depthMaterial);
     buttonDepth.scale.set(0.84, 0.2, 0.84);
     buttonDepth.position.copy(send.position);
     buttonDepth.position.y -= 0.06;
     copy.add(buttonDepth);
-    return { model: copy, body: shell, button: send, ownedMaterials: [...materials.values(), depthMaterial, buttonDepthMaterial] };
+    return { model: copy, body: shell, button: send, ownedMaterials: [...materials.values(), depthMaterial] };
   }, [gltf]);
 
   useLayoutEffect(() => {
@@ -62,7 +100,7 @@ function ChatbarModel({ onLayout, onReady }) {
     camera.right = 6.4;
     camera.top = 6.4 / aspect;
     camera.bottom = -6.4 / aspect;
-    camera.position.set(0, 16, 7);
+    camera.position.set(0, 22, 7);
     camera.lookAt(0, 0.1, 0);
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld(true);
@@ -117,21 +155,21 @@ export default function Chatbar3D({ focused, onLayout, onReady, onFailure }) {
       <ModelErrorBoundary onFailure={onFailure}>
         <Canvas
           orthographic
-          camera={{ position: [0, 16, 7], near: 0.1, far: 45 }}
+          camera={{ position: [0, 22, 7], near: 0.1, far: 45 }}
           dpr={[1, 1.35]}
           frameloop="demand"
           fallback={null}
           gl={{ alpha: true, antialias: true, powerPreference: "low-power" }}
           onCreated={({ gl }) => {
             gl.setClearColor(0x000000, 0);
-            gl.toneMappingExposure = 0.94;
+            gl.toneMappingExposure = 0.98;
           }}
         >
           <ContextGuard onFailure={onFailure} />
           <StudioReflections lowKey />
-          <ambientLight intensity={0.3} />
-          <directionalLight position={[-4, 8, 5]} intensity={focused ? 0.95 : 0.65} color="#e9fdff" />
-          <directionalLight position={[5, 4, -3]} intensity={0.35} color="#71c5df" />
+          <ambientLight intensity={0.4} />
+          <directionalLight position={[-4, 8, 5]} intensity={focused ? 1.05 : 0.8} color="#d8f8fc" />
+          <directionalLight position={[5, 4, -3]} intensity={0.55} color="#6bd8ed" />
           <Suspense fallback={null}>
             <ChatbarModel onLayout={onLayout} onReady={onReady} />
           </Suspense>
