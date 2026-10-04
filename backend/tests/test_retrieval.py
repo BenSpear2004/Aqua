@@ -192,3 +192,72 @@ def test_content_hash_changes_with_text_or_model() -> None:
     assert content_hash("a", "m1") != content_hash("b", "m1")
     assert content_hash("a", "m1") != content_hash("a", "m2")
     assert content_hash("a", "m1") == content_hash("a", "m1")
+
+
+# ---- indexer safety ----
+
+
+def test_same_service_compares_host_port_and_database() -> None:
+    from nl2sql.retrieval.store import same_service
+
+    reader = "postgresql://nl2sql_reader:pw@bank.example:38363/tsdb?sslmode=require"
+    indexer = (
+        "postgresql://nl2sql_indexer:other@bank.example:38363/tsdb?sslmode=require"
+    )
+    assert same_service(reader, indexer)
+    assert not same_service(reader, indexer.replace("bank.example", "pagila.example"))
+    assert not same_service(reader, indexer.replace("38363", "35955"))
+
+
+def test_indexer_refuses_two_different_services(monkeypatch, capsys) -> None:
+    from nl2sql.retrieval import store
+
+    monkeypatch.setattr(
+        store,
+        "load_settings",
+        lambda: Settings(
+            database_url="postgresql://r:pw@bank.example:1/tsdb",
+            indexer_database_url="postgresql://i:pw@pagila.example:2/tsdb",
+        ),
+    )
+    assert store.main([]) == 1
+    assert "different services" in capsys.readouterr().out
+
+
+def test_no_examples_skips_the_question_set(monkeypatch) -> None:
+    """A database with no question set yet: embed the tables only."""
+    from nl2sql.retrieval import store
+
+    url = "postgresql://x:pw@db.example:1/tsdb"
+    monkeypatch.setattr(
+        store,
+        "load_settings",
+        lambda: Settings(database_url=url, indexer_database_url=url),
+    )
+    monkeypatch.setattr(store, "get_schema", lambda settings: SCHEMA)
+
+    def fail(*args, **kwargs):
+        raise AssertionError("the question set must not be read")
+
+    monkeypatch.setattr(store, "load_examples", fail)
+    seen = {}
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(store.psycopg, "connect", lambda *a, **k: FakeConn())
+    monkeypatch.setattr(
+        store, "sync_schema_docs", lambda conn, schema, settings, dry: {"tables": 6}
+    )
+
+    def fake_sync_examples(conn, examples, settings, dry):
+        seen["examples"] = list(examples)
+        return {}
+
+    monkeypatch.setattr(store, "sync_examples", fake_sync_examples)
+    assert store.main(["--no-examples"]) == 0
+    assert seen["examples"] == []

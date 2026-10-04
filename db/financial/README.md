@@ -23,7 +23,22 @@ $env:PGPASSWORD = Read-Host "Bank service tsdbadmin password"
 | 2 | `docker run --rm -it -v "${PWD}:/data" -e ADMIN_URL -e PGPASSWORD postgres:18 sh -c 'psql "$ADMIN_URL" -f /data/db/financial/02_load.sql'` | Creates the tables in `public`, loads the rows in one transaction, adds keys, indexes and English column comments |
 | 3 | `docker run --rm -it -v "${PWD}:/data" -e ADMIN_URL -e PGPASSWORD postgres:18 sh -c 'psql "$ADMIN_URL" -f /data/db/03_users.sql'` | Creates `nl2sql_reader` on this service; prompts for its password |
 
-Then run `Remove-Item Env:ADMIN_URL, Env:PGPASSWORD`.
+Retrieval (Phase 4) needs two more steps on this service, run the same way:
+
+| Step | Command | What it does |
+|---|---|---|
+| 4 | `... psql "$ADMIN_URL" -f /data/db/01_extensions.sql` | Enables pgvector and pgvectorscale on this service |
+| 5 | `... psql "$ADMIN_URL" -f /data/db/04_retrieval.sql` | Creates the `retrieval` schema and `nl2sql_indexer`; prompts for its password |
+
+Do not run `db/05_hide_columns.sql` here: it hides Pagila's `staff.password` and fails on a database without a `staff` table.
+
+Then run `Remove-Item Env:ADMIN_URL, Env:PGPASSWORD`, set `DATABASE_URL` and `INDEXER_DATABASE_URL` in `.env` to this service, and build the index from `backend/`:
+
+```bash
+python -m nl2sql.retrieval.store --no-examples
+```
+
+`--no-examples` embeds the bank tables only, because the training questions in `eval/datasets/` are written for Pagila. The indexer refuses to run if the two URLs point at different services.
 
 Step 2 refuses to run if the tables already exist, or if `ADMIN_URL` points at the Pagila service.
 
