@@ -51,6 +51,7 @@
 
 .chat-bar-model {
   z-index: 0;
+  transition: filter var(--duration-fast) ease;
 }
 
 .composer-surface {
@@ -66,10 +67,10 @@
 .chat-bar-fallback {
   position: absolute;
   inset: calc(50% - 6.216cqw) 3.125% calc(50% - 6.691cqw);
-  border: 1px solid rgba(175, 236, 248, 0.28);
-  border-radius: 26px;
+  border: 0;
+  border-radius: 999px;
   background: radial-gradient(ellipse at 28% 2%, rgba(182, 224, 231, 0.12), transparent 78%), linear-gradient(160deg, rgba(80, 115, 130, 0.56), rgba(48, 81, 99, 0.7) 48%, rgba(22, 47, 65, 0.84));
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18), inset 0 2px 2px rgba(230, 253, 255, 0.24), inset 0 -5px 9px rgba(3, 18, 32, 0.2);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.18), inset 0 2px 3px rgba(230, 253, 255, 0.24);
   pointer-events: none;
 }
 
@@ -90,7 +91,7 @@
   border-radius: 8px;
   outline: none;
   background: transparent;
-  color: #f5fcff;
+  color: rgba(231, 248, 254, 0.72);
   caret-color: #b9f3fc;
   font-size: 16px;
   line-height: 1.45;
@@ -99,12 +100,16 @@
 }
 
 .chat-bar-stage .chat-bar-input::placeholder {
-  color: rgba(231, 248, 254, 0.9);
+  color: rgba(226, 239, 246, 0.62);
 }
 
 .chat-bar-stage .chat-bar-input:focus-visible {
-  outline: 1px solid rgba(198, 244, 254, 0.58);
-  outline-offset: 2px;
+  outline: none;
+}
+
+.chat-bar-stage:has(.chat-bar-input:focus-visible) .chat-bar-model,
+.chat-bar-stage:has(.chat-bar-input:focus-visible) .chat-bar-fallback {
+  filter: brightness(1.13);
 }
 
 .chat-bar-stage .send-button--model {

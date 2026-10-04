@@ -73,9 +73,20 @@ function ChatbarModel({ onLayout, onReady }) {
     const shell = copy.getObjectByName("AQUA_Single_Clear_Glass_Body");
     const send = copy.getObjectByName("AQUA_Glass_Send_Button");
     if (!shell || !send) throw new Error("The supplied chat bar has no usable shell or send region.");
-    // This closed mesh needs only its outer faces. Double-sided transmission feeds
-    // its rear reflection into the bar and creates a bright patch above the arrow.
+    // Both source meshes are closed; the rear transmission pass adds stray reflections.
+    shell.material.side = FrontSide;
     send.material.side = FrontSide;
+    // The visible front bevel is +z. Keep its transmission, but remove its specular
+    // stripes so the continuous upper/-z reflection remains the sole bright edge.
+    shell.material.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <transmission_fragment>",
+        `#include <transmission_fragment>
+         #ifdef USE_TRANSMISSION
+           totalSpecular *= 1.0 - smoothstep(0.1, 0.48, vWorldPosition.z);
+         #endif`
+      );
+    };
     // WebGL transmission cannot sample the DOM underneath a transparent canvas. These
     // inset receivers use original asset geometry with a softly lit aqua gradient.
     // The outer GLB remains the visible glass and refracts this in-scene illumination.
