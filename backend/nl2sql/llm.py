@@ -158,7 +158,14 @@ def _complete_gemini(
     from google.genai import errors, types  # Ollama-only setups never load it
 
     model = settings.gemini_model
-    config: dict[str, Any] = {"seed": SEED}
+    # No tools are passed, so automatic function calling only adds a
+    # warning to every call's log; switch it off.
+    config: dict[str, Any] = {
+        "seed": SEED,
+        "automatic_function_calling": types.AutomaticFunctionCallingConfig(
+            disable=True
+        ),
+    }
     contents = prompt
     if model.lower().startswith("gemma"):
         if system:
