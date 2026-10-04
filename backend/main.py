@@ -1,8 +1,16 @@
+import logging
 import os
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+
+from nl2sql.config import load_settings
+from nl2sql.db import DatabaseError
+from nl2sql.llm import LLMError
+from nl2sql.pipeline import answer_question, load_default_schema
+from nl2sql.response import outage_response, to_response
 
 app = FastAPI(title="Bank AI")
 
@@ -71,3 +79,47 @@ async def chat(request: ChatRequest):
     if not isinstance(answer, str):
         raise HTTPException(502, "Unexpected response from Ollama.")
     return {"answer": answer}
+
+
+# ---- NL2SQL pipeline ----
+
+log = logging.getLogger("aqua")
+
+# Loaded once at startup. The schema file is temporary until schema.py.
+SETTINGS = load_settings()
+SCHEMA = load_default_schema()
+
+
+class QueryRequest(BaseModel):
+    # Whitespace is trimmed first, so a blank question fails min_length
+    # and FastAPI answers 422 before the model is called.
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    question: str = Field(min_length=1, max_length=2000)
+
+
+@app.post("/api/query")
+def query(request: QueryRequest):
+    """Answer a question with SQL, rows and the SQL that produced them.
+
+    A plain def (not async): FastAPI runs it in a worker thread, so a
+    slow model call does not hold up other requests. Rejected or failed
+    queries return 200 with status "error" so the UI can show the SQL and
+    the reason; an unreachable model or database returns 503. Details of
+    outages are logged, not sent, so internal addresses stay private.
+    """
+    try:
+        answer = answer_question(request.question, SETTINGS, SCHEMA)
+    except LLMError as exc:
+        log.warning("model unavailable: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content=outage_response("model_unavailable", "The language model is not reachable right now."),
+        )
+    except DatabaseError as exc:
+        log.warning("database unavailable: %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content=outage_response("database_unavailable", "The database is not reachable right now."),
+        )
+    return to_response(answer)
