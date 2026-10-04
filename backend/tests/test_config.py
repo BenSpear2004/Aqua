@@ -81,3 +81,43 @@ def test_settings_can_be_built_by_hand() -> None:
     settings = Settings(ollama_model="m", ollama_think=False)
     assert settings.ollama_model == "m"
     assert settings.ollama_base_url == "http://127.0.0.1:11434"
+
+
+# ---- Gemini, indexer and retrieval (Phase 4) ----
+
+
+def test_gemini_and_retrieval_defaults() -> None:
+    settings = settings_from({})
+    assert settings.gemini_api_key == ""
+    assert settings.gemini_model == "gemma-4-31b-it"
+    assert settings.gemini_embed_model == "gemini-embedding-2"
+    assert settings.indexer_database_url == ""
+    assert settings.retrieval is False  # off until the index is built
+
+
+def test_gemini_indexer_and_retrieval_are_read() -> None:
+    settings = settings_from(
+        {
+            "GEMINI_API_KEY": " key ",
+            "GEMINI_MODEL": "gemma-4-26b-a4b-it",
+            "GEMINI_EMBED_MODEL": "gemini-embedding-001",
+            "INDEXER_DATABASE_URL": "postgresql://nl2sql_indexer:pw@db/tsdb",
+            "RETRIEVAL": "on",
+        }
+    )
+    assert settings.gemini_api_key == "key"
+    assert settings.gemini_model == "gemma-4-26b-a4b-it"
+    assert settings.gemini_embed_model == "gemini-embedding-001"
+    assert settings.indexer_database_url == "postgresql://nl2sql_indexer:pw@db/tsdb"
+    assert settings.retrieval is True
+
+
+def test_unclear_retrieval_value_is_rejected() -> None:
+    with pytest.raises(ConfigError, match="RETRIEVAL"):
+        settings_from({"RETRIEVAL": "sometimes"})
+
+
+def test_secrets_never_appear_when_printed() -> None:
+    settings = settings_from({"GEMINI_API_KEY": "sk-secret", "INDEXER_DATABASE_URL": "postgresql://i:pw2@h/db"})
+    assert "sk-secret" not in repr(settings)
+    assert "pw2" not in repr(settings)

@@ -8,7 +8,6 @@ separately, by running real questions against the database.
 """
 
 import json
-from pathlib import Path
 
 import httpx
 import pytest
@@ -17,10 +16,11 @@ from nl2sql.config import Settings
 from nl2sql.generate import (
     SQL_REPLY_SCHEMA,
     SYSTEM_INSTRUCTION,
+    Attempt,
+    Example,
     build_prompt,
     extract_sql,
     generate_sql,
-    load_schema,
 )
 from nl2sql.llm import LLMError
 
@@ -38,18 +38,6 @@ def mock_client(content: str = '{"sql": "SELECT 1"}', thinking: str = "", status
         return httpx.Response(status, json=reply)
 
     return httpx.Client(transport=httpx.MockTransport(handler)), requests
-
-
-# ---- load_schema ----
-
-
-def test_load_schema_strips_only_comment_lines(tmp_path: Path) -> None:
-    schema_file = tmp_path / "schema.sql"
-    schema_file.write_text(
-        "-- a header\n  -- indented comment\nCREATE TABLE t (\n  id INT\n);\n",
-        encoding="utf-8",
-    )
-    assert load_schema(schema_file) == "CREATE TABLE t (\n  id INT\n);"
 
 
 # ---- build_prompt ----
@@ -140,3 +128,44 @@ def test_model_failure_surfaces_as_llm_error() -> None:
     client, _ = mock_client(status=500)
     with pytest.raises(LLMError):
         generate_sql("q", SCHEMA, SETTINGS, client=client)
+
+
+# ---- examples and retries ----
+
+
+def test_examples_sit_between_schema_and_question() -> None:
+    examples = [Example("How many actors?", "SELECT count(*) FROM actor")]
+    prompt = build_prompt("How many films?", SCHEMA, examples)
+    assert prompt.index(SCHEMA) < prompt.index("How many actors?") < prompt.index("Question: How many films?")
+    assert "SQL: SELECT count(*) FROM actor" in prompt
+
+
+def test_no_examples_means_no_examples_heading() -> None:
+    assert "Examples" not in build_prompt("q", SCHEMA)
+
+
+def test_previous_attempt_comes_last_with_its_error() -> None:
+    previous = Attempt("SELECT nope FROM film", 'column "nope" does not exist')
+    prompt = build_prompt("q", SCHEMA, previous=previous)
+    assert prompt.endswith("Write a corrected query that answers the question.")
+    assert prompt.index("Question: q") < prompt.index("SELECT nope FROM film")
+    assert 'It failed: column "nope" does not exist' in prompt
+
+
+def test_examples_and_previous_attempt_reach_the_model() -> None:
+    client, requests = mock_client()
+    generate_sql(
+        "How many films?",
+        SCHEMA,
+        SETTINGS,
+        client=client,
+        examples=[Example("How many actors?", "SELECT count(*) FROM actor")],
+        previous=Attempt("SELEC 1", "could not be parsed"),
+    )
+    sent = requests[0]["messages"][-1]["content"]
+    assert "How many actors?" in sent and "could not be parsed" in sent
+
+
+def test_instruction_asks_for_named_columns_and_aliases() -> None:
+    assert "never use SELECT *" in SYSTEM_INSTRUCTION
+    assert "snake_case alias" in SYSTEM_INSTRUCTION

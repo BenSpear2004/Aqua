@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
+DEFAULT_GEMINI_MODEL = "gemma-4-31b-it"
+DEFAULT_GEMINI_EMBED_MODEL = "gemini-embedding-2"
 
 # The repo-root .env, two folders up from this file (backend/nl2sql/).
 # Inside the Docker image this path does not exist, which is fine:
@@ -47,9 +49,19 @@ class Settings:
     # Whether the model reasons before answering. Slower but more
     # accurate in our tests; qwen3:8b supports turning it off.
     ollama_think: bool = True
-    # Empty until we decide where Sakila is hosted. Hidden when printed
+    # The read-only nl2sql_reader connection. Hidden when printed
     # because database URLs usually contain the password.
     database_url: str = field(default="", repr=False)
+    # The nl2sql_indexer connection, used only by the offline embedding
+    # indexer (retrieval/store.py), never by the web app.
+    indexer_database_url: str = field(default="", repr=False)
+    # Gemini API: embeddings for retrieval, and the free Gemma backup.
+    gemini_api_key: str = field(default="", repr=False)
+    gemini_model: str = DEFAULT_GEMINI_MODEL
+    gemini_embed_model: str = DEFAULT_GEMINI_EMBED_MODEL
+    # Retrieve relevant tables and examples per question (Phase 4). Off
+    # until the indexer has run and the eval shows it helps.
+    retrieval: bool = False
 
 
 def _flag(name: str, value: str) -> bool:
@@ -80,11 +92,17 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
         )
 
     think = get("OLLAMA_THINK")
+    retrieval = get("RETRIEVAL")
     return Settings(
         ollama_base_url=base_url.rstrip("/"),
         ollama_model=get("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL,
         ollama_think=_flag("OLLAMA_THINK", think) if think else True,
         database_url=get("DATABASE_URL"),
+        indexer_database_url=get("INDEXER_DATABASE_URL"),
+        gemini_api_key=get("GEMINI_API_KEY"),
+        gemini_model=get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL,
+        gemini_embed_model=get("GEMINI_EMBED_MODEL") or DEFAULT_GEMINI_EMBED_MODEL,
+        retrieval=_flag("RETRIEVAL", retrieval) if retrieval else False,
     )
 
 

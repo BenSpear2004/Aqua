@@ -23,7 +23,11 @@ export ADMIN_URL='postgresql://tsdbadmin:PASSWORD@HOST:PORT/tsdb?sslmode=require
 | 3 | `psql "$ADMIN_URL" -f db/03_users.sql` | Creates `nl2sql_reader`; prompts for its password |
 | 4 | `psql "$ADMIN_URL" -f db/04_retrieval.sql` | Creates the `retrieval` schema and embedding tables, and the `nl2sql_indexer` role; prompts for its password |
 
-Order matters: step 3 grants `SELECT` on the tables step 2 creates.
+| 5 | `psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -f db/05_hide_columns.sql` | Takes `staff.password` and `staff.picture` away from `nl2sql_reader`; prints the staff columns it keeps |
+
+Order matters: step 3 grants `SELECT` on the tables step 2 creates, and step 5 narrows the staff part of that grant. Run step 5 again after any re-run of step 3.
+
+After step 4, fill the retrieval tables from `backend/` with `python -m nl2sql.retrieval.store`. It needs `INDEXER_DATABASE_URL` and `GEMINI_API_KEY` in `.env`, embeds only what changed, and is safe to run again.
 
 Step 2 refuses to run if `public.film` already exists. To reload from scratch, drop the Pagila objects first (ask the team before doing that on the shared service).
 

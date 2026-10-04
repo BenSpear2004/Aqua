@@ -76,12 +76,47 @@ def test_binary_values_are_not_sent() -> None:
     assert body["tables"][0]["rows"][0]["picture"] is None
 
 
-def test_messages() -> None:
-    assert to_response(answer(["n"], [])) ["message"] == "No matching rows were found."
-    assert to_response(answer(["films"], [(1000,)]))["message"] == "The answer is 1000."
-    assert to_response(answer(["title"], [("A",), ("B",)]))["message"] == "Found 2 rows."
+def test_messages_come_from_summarize() -> None:
+    assert to_response(answer(["n"], []))["message"] == "No matching rows were found."
+    assert to_response(answer(["films"], [(1000,)]))["message"] == "**Films**: 1,000."
     truncated = to_response(answer(["title"], [("A",), ("B",)], truncated=True))
-    assert truncated["message"] == "Found 2 rows. Only the first 2 are shown."
+    assert truncated["message"].endswith("Only the first 2 rows are shown; there are more.")
+
+
+def test_single_number_becomes_a_kpi_card() -> None:
+    body = to_response(answer(["total_revenue"], [(Decimal("67406.56"),)]))
+    assert body["kpis"] == [{"id": "answer", "label": "Total revenue", "value": 67406.56, "type": "currency"}]
+    assert body["visualizations"] == [{"id": "answer-kpi", "type": "kpi", "title": "Who spent the most?"}]
+
+
+def test_labels_and_a_measure_become_a_bar_chart_on_the_result_table() -> None:
+    body = to_response(answer(
+        ["first_name", "last_name", "total_spent"],
+        [("KARL", "SEAL", Decimal("221.55")), ("ELEANOR", "HUNT", Decimal("216.54"))],
+    ))
+    (chart,) = body["visualizations"]
+    assert chart == {"id": "chart", "type": "bar", "title": "Who spent the most?", "tableId": "result",
+                     "xKey": "first_name", "yKey": "total_spent"}
+    keys = {c["key"] for c in body["tables"][0]["columns"]}
+    assert {chart["xKey"], chart["yKey"]} <= keys  # the frontend drops charts that miss
+    assert body["kpis"] == []
+
+
+def test_dates_and_a_measure_become_a_line_chart() -> None:
+    body = to_response(answer(["day", "rentals"], [(dt.date(2022, 5, 24), 8), (dt.date(2022, 5, 25), 137)]))
+    assert body["visualizations"][0]["type"] == "line"
+    assert body["visualizations"][0]["xKey"] == "day"
+
+
+def test_chart_keys_follow_renamed_columns() -> None:
+    body = to_response(answer(["name", "name", "n"], [("a", "b", 1), ("c", "d", 2)]))
+    assert body["visualizations"][0]["xKey"] == "name"
+    assert body["visualizations"][0]["yKey"] == "n"
+
+
+def test_plain_lists_get_no_chart() -> None:
+    body = to_response(answer(["title"], [("A",), ("B",)]))
+    assert body["visualizations"] == [] and body["kpis"] == []
 
 
 def test_rejected_answer() -> None:

@@ -66,26 +66,27 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 ├── docker-compose.yml        backend + frontend services
 ├── backend/
 │   ├── Dockerfile
-│   ├── requirements.txt      Core dependencies, Phases 0 to 3
-│   ├── requirements-ml.txt   Retrieval and fine-tuning stack, Phase 4 onward
+│   ├── requirements.txt      Runtime dependencies, including google-genai for retrieval
+│   ├── requirements-ml.txt   Later: fine-tuning stack only
 │   ├── main.py               FastAPI routes only; calls nl2sql.pipeline
 │   ├── nl2sql/
 │   │   ├── __init__.py
 │   │   ├── config.py         Loads env, exposes typed settings
 │   │   ├── db.py             Connection as the read-only role
-│   │   ├── schema.py         Introspects tables, columns, keys into text for prompts
+│   │   ├── schema.py         Reads tables, columns, keys from the database; prompt text, allowlist, table docs
 │   │   ├── llm.py            Thin model wrapper; the only file that calls a model (Ollama, Gemini backup)
-│   │   ├── prompt.py         Builds the prompt from question + schema + examples
+│   │   ├── generate.py       Builds the prompt (schema, examples, failed attempt) and asks for SQL
 │   │   ├── validate.py       AST safety checks (layer 1)
 │   │   ├── execute.py        Runs validated SQL in a read-only transaction
-│   │   ├── summarize.py      Turns result rows into a short answer
+│   │   ├── summarize.py      Turns result rows into a short answer, by rule, no model call
 │   │   ├── visualize.py      Picks a chart for a result (first version; Ben owns it)
-│   │   ├── pipeline.py       question -> prompt -> SQL -> validate -> execute -> summarize
-│   │   ├── retrieval/        Phase 4: embed.py, store.py, select.py
+│   │   ├── response.py       Answer -> the JSON the frontend renders
+│   │   ├── pipeline.py       context -> generate -> validate -> execute, one retry if fixable
+│   │   ├── retrieval/        Phase 4: embed.py (Gemini), store.py (offline indexer), select.py
 │   │   └── querylog.py       Phase 7: logs questions, SQL, outcome
 │   └── tests/
 │       ├── test_validate.py  Highest priority; adversarial SQL cases
-│       ├── test_db_readonly.py Confirms writes fail as nl2sql_reader
+│       ├── test_db_readonly.py Confirms writes and hidden columns fail as nl2sql_reader
 │       └── test_pipeline.py  Pipeline with the LLM mocked
 ├── frontend/
 │   ├── Dockerfile
@@ -98,10 +99,11 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   ├── 01_extensions.sql     vector, vectorscale
 │   ├── 02_load_pagila.sh     Loads Pagila, strips OWNER TO lines
 │   ├── 03_users.sql          Creates nl2sql_reader (psql prompts for the password)
-│   └── 04_retrieval.sql      retrieval schema, embedding tables, nl2sql_indexer role (Phase 4)
+│   ├── 04_retrieval.sql      retrieval schema, embedding tables, nl2sql_indexer role (Phase 4)
+│   └── 05_hide_columns.sql   Takes staff.password and staff.picture from the reader (Phase 5)
 ├── eval/
-│   ├── datasets/             Question and gold-SQL pairs (JSONL)
-│   ├── run_eval.py           Runs the pipeline over a dataset
+│   ├── datasets/             pagila_v1.jsonl: 50 test and 25 train questions with gold SQL
+│   ├── run_eval.py           Runs the pipeline over a dataset; --retrieval, --check-gold
 │   ├── metrics.py            Execution accuracy, validity rate, latency
 │   └── results/              Gitignored output
 ├── finetune/                 Later: data prep and training scripts
@@ -110,7 +112,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
     └── decisions.md          Every significant choice and why
 ```
 
-Directories that only hold a `.gitkeep` are placeholders. When `backend/nl2sql/` is added, `backend/Dockerfile` must copy it into the image along with `main.py`.
+Directories that only hold a `.gitkeep` are placeholders. `backend/Dockerfile` copies `main.py` and the whole `nl2sql/` package; `eval/` and `db/` stay out of the image.
 
 ## API contract
 
@@ -118,22 +120,22 @@ The frontend talks to the backend only through `/api`. Keep these shapes stable;
 
 | Route | Purpose |
 |---|---|
-| `GET /api/health` | Liveness and whether the database and model are configured |
+| `GET /api/health` | Liveness for the Docker healthcheck: `status`, `database_configured`, `model`, `retrieval`. Never touches the database or model |
 | `POST /api/query` | Body `{"question": str}`. Returns `{"status": "success" or "error", "sql": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
 
-The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. `visualizations` and `kpis` are empty until `nl2sql/visualize.py` is wired in.
+The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. `message` is a rule-based summary from `summarize.py`. `visualizations` and `kpis` come from `visualize.py`: a single number gives one KPI (`{"id", "label", "value", "type"}`) plus a `{"type": "kpi"}` visualization; labels with a measure give a `bar`, a date with a measure a `line`, each `{"id", "type", "title", "tableId": "result", "xKey", "yKey"}`; anything else leaves both empty. The frontend draws one x column, so a chart labelled by first and last name uses the first.
 
-Proposed, not yet part of the contract: a `chart` field produced by `nl2sql/visualize.py`, for example `{"type": "bar", "x": ["title"], "y": "rental_count"}`, or `null` when a table fits best. Ben decides whether and how it is added; until then the frontend should not rely on it.
+Charts use the existing `visualizations` and `kpis` fields described above; there is no separate `chart` field. Ben owns `visualize.py` and decides any change to how charts are chosen or shaped.
 
 ## Pipeline
 
 1. Receive a question.
-2. Build context: schema text (Phase 2), later the retrieved relevant tables and similar example queries (Phase 4).
+2. Build context: every table from `schema.py`, or with `RETRIEVAL=on` the nearest tables plus similar verified examples. If retrieval fails, fall back to every table.
 3. Ask the model (Ollama by default, Gemini as backup) for one SQL statement.
-4. Validate the SQL with `validate.py`. On failure, return the reason; never execute.
+4. Validate the SQL with `validate.py` against the schema's allowlist. On failure, never execute.
 5. Execute in a read-only transaction with a row limit and timeout.
-6. Summarize the rows.
-7. Return rows, summary, and the SQL.
+6. If step 4 or 5 failed and the error is fixable (`UnsafeQueryError.fixable`, or a database error other than a timeout), ask the model once more with the failed SQL and the error. Writes, dangerous functions and catalog access are never retried.
+7. Summarize the rows, pick a chart, and return rows, summary, chart and SQL.
 
 ## Safety rules (non-negotiable)
 
@@ -155,6 +157,8 @@ Layer 2 is the database role. The app connects only as `nl2sql_reader`, which ha
 
 The admin account (`tsdbadmin`) must never appear in app code, `.env`, docker-compose, or tests. It is used only by a human running `db/` scripts with `ADMIN_URL` exported in their shell. Tableau also connects with a read-only role, never the admin account.
 
+Hidden columns (`staff.password`, `staff.picture`) are refused at both layers: the validator rejects any query that names them, selects `*` from `staff`, or uses the whole row, and `db/05_hide_columns.sql` replaces the reader's table grant on `staff` with column grants. `schema.py` never shows them to the model.
+
 The offline embedding indexer connects as `nl2sql_indexer` through `INDEXER_DATABASE_URL`. That role can write only to the `retrieval` schema and has no grants on `public`. The web app never uses it. The reader can `SELECT` from `retrieval` for similarity search, but the validator's allowlist must never include retrieval tables, so generated SQL cannot read them.
 
 ## Environment variables
@@ -168,6 +172,7 @@ GEMINI_MODEL=gemma-4-31b-it
 GEMINI_EMBED_MODEL=gemini-embedding-2
 DATABASE_URL=postgresql://nl2sql_reader:CHANGE_ME@HOST:PORT/tsdb?sslmode=require
 INDEXER_DATABASE_URL=postgresql://nl2sql_indexer:CHANGE_ME@HOST:PORT/tsdb?sslmode=require
+RETRIEVAL=off
 ```
 
 Read them only through `backend/nl2sql/config.py`. docker-compose passes `.env` to the backend container. Gemini rate limits are per Google Cloud project, so each developer uses an AI Studio key from their own project and the server at `/srv/bank-ai` uses a separate one.
@@ -196,7 +201,7 @@ Work one phase at a time. Do not build ahead. Frontend work can run alongside ba
 - Format Python with black, default settings.
 - Never commit `.env`, `.venv/`, `node_modules/`, database dumps, or eval results.
 - Add new dependencies only when needed, and say why in the change description.
-- Do not install `requirements-ml.txt` before Phase 4.
+- `requirements-ml.txt` is for the fine-tuning stack only; runtime dependencies go in `requirements.txt`.
 - Any significant choice gets an entry in `docs/decisions.md`: the decision, alternatives, reasoning.
 
 ## Commands
@@ -208,9 +213,19 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp ../.env.example ../.env       # then fill in values
 python -m nl2sql.db              # connection smoke test
+python -m nl2sql.schema          # print the schema the model sees
 pytest
 black .
 uvicorn main:app --reload --port 8000
+python -m nl2sql.retrieval.store # embed schema and train examples (needs INDEXER_DATABASE_URL)
+```
+
+Evaluation (run from the repo root, backend venv active; the model must be reachable):
+
+```bash
+python eval/run_eval.py --check-gold   # gold SQL only, no model calls
+python eval/run_eval.py                # baseline: every table, no examples
+python eval/run_eval.py --retrieval    # with retrieval, for the Phase 4 comparison
 ```
 
 Local frontend development (run from `frontend/`):

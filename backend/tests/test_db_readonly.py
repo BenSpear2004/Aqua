@@ -64,3 +64,34 @@ def test_writes_fail_even_with_read_only_switched_off(sql: str) -> None:
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute(sql)
         conn.rollback()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    ["SELECT password FROM staff", "SELECT * FROM staff", "SELECT row_to_json(s) FROM staff s"],
+)
+def test_hidden_staff_columns_are_refused_by_the_database(sql: str) -> None:
+    """Layer 2 for staff.password and staff.picture. Fails until
+    db/05_hide_columns.sql has been run on this database."""
+    with connect(SETTINGS) as conn:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute(sql)
+        conn.rollback()
+
+
+def test_other_staff_columns_are_still_readable() -> None:
+    with connect(SETTINGS) as conn:
+        rows = conn.execute("SELECT first_name, last_name FROM staff").fetchall()
+    assert len(rows) >= 1
+
+
+def test_reader_can_search_but_not_write_the_retrieval_schema() -> None:
+    """Needs db/04_retrieval.sql. The app searches these tables at
+    question time; only nl2sql_indexer may change them."""
+    with connect(SETTINGS) as conn:
+        conn.execute("SELECT count(*) FROM retrieval.schema_doc").fetchone()
+        conn.rollback()  # read_only can only change between transactions
+        conn.read_only = False
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            conn.execute("DELETE FROM retrieval.example_query WHERE false")
+        conn.rollback()

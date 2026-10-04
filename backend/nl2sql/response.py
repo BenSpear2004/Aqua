@@ -5,8 +5,9 @@ visualizations, kpis, error), plus sql so every answer shows the query
 that produced it. Database values are converted to plain JSON types
 here: Decimal to numbers, dates to ISO strings.
 
-Charts and KPI cards stay empty until visualize.py is wired in, and the
-message is a plain one-line description until summarize.py exists.
+The message comes from summarize.py and the chart from visualize.py: a
+single number becomes a KPI card, labels with a measure a bar chart, a
+date with a measure a line chart, and anything else just the table.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from decimal import Decimal
 from typing import Any
 
 from nl2sql.pipeline import Answer
+from nl2sql.summarize import summarize
+from nl2sql.visualize import suggest_chart
 
 # Column-name words that suggest money. A guess from the name only; the
 # frontend shows these as dollars instead of plain numbers.
@@ -60,17 +63,36 @@ def _label(key: str) -> str:
     return key.replace("_", " ").strip().capitalize()
 
 
-def _message(answer: Answer) -> str:
-    """A plain description of the result until summarize.py exists."""
-    count = len(answer.rows)
-    if count == 0:
-        return "No matching rows were found."
-    if count == 1 and len(answer.columns) == 1:
-        return f"The answer is {_json_value(answer.rows[0][0])}."
-    text = f"Found {count} row{'s' if count != 1 else ''}."
-    if answer.truncated:
-        text += f" Only the first {count} are shown."
-    return text
+def _chart(answer: Answer, keys: list[str], columns: list[dict[str, Any]]) -> tuple[list, list]:
+    """The visualizations and kpis lists for one result.
+
+    The frontend draws one x column, so a chart labelled by first and
+    last name uses the first of them. Keys come from the table's column
+    list, which may have renamed a repeated column name.
+    """
+    chart = suggest_chart(answer.columns, answer.rows)
+    key_of = {name: keys[answer.columns.index(name)] for name in answer.columns}
+    if chart.type == "number" and chart.y is not None:
+        key = key_of[chart.y]
+        column = next(c for c in columns if c["key"] == key)
+        kpi = {
+            "id": "answer",
+            "label": column["label"],
+            "value": _json_value(answer.rows[0][answer.columns.index(chart.y)]),
+            "type": column["type"],
+        }
+        return [{"id": "answer-kpi", "type": "kpi", "title": answer.question}], [kpi]
+    if chart.type in ("bar", "line") and chart.x and chart.y is not None:
+        visualization = {
+            "id": "chart",
+            "type": chart.type,
+            "title": answer.question,
+            "tableId": "result",
+            "xKey": key_of[chart.x[0]],
+            "yKey": key_of[chart.y],
+        }
+        return [visualization], []
+    return [], []
 
 
 def to_response(answer: Answer) -> dict[str, Any]:
@@ -93,14 +115,15 @@ def to_response(answer: Answer) -> dict[str, Any]:
         if column["type"] == "currency":
             column["fractionDigits"] = 2  # cents; the frontend defaults to whole dollars
         columns.append(column)
-    rows =[{key: _json_value(row[i]) for i, key in enumerate(keys)} for row in answer.rows]
+    rows = [{key: _json_value(row[i]) for i, key in enumerate(keys)} for row in answer.rows]
+    visualizations, kpis = _chart(answer, keys, columns)
     return {
         "status": "success",
         "sql": answer.sql,
-        "message": _message(answer),
+        "message": summarize(answer.columns, answer.rows, answer.truncated),
         "tables": [{"id": "result", "title": answer.question, "columns": columns, "rows": rows}],
-        "visualizations": [],
-        "kpis": [],
+        "visualizations": visualizations,
+        "kpis": kpis,
         "error": None,
     }
 

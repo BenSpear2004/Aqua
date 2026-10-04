@@ -11,21 +11,26 @@ import main
 from nl2sql.db import DatabaseError
 from nl2sql.llm import LLMError
 from nl2sql.pipeline import Answer
+from nl2sql.schema import Schema
 
 client = TestClient(main.app)
 
 
+SCHEMA = Schema(tables={})
+
+
 def use_answer(monkeypatch: pytest.MonkeyPatch, result) -> list:
-    """Replace the pipeline; returns the questions it was asked."""
+    """Replace the pipeline and the schema lookup; returns the questions asked."""
     asked = []
 
-    def fake_answer_question(question, settings, schema):
+    def fake_answer_question(question, settings, schema, retriever=None):
         asked.append(question)
         if isinstance(result, Exception):
             raise result
         return result
 
     monkeypatch.setattr(main, "answer_question", fake_answer_question)
+    monkeypatch.setattr(main, "get_schema", lambda settings: SCHEMA)
     return asked
 
 
@@ -82,3 +87,27 @@ def test_question_whitespace_is_trimmed(monkeypatch: pytest.MonkeyPatch) -> None
     asked = use_answer(monkeypatch, Answer(question="q", sql="SELECT 1", columns=["n"], rows=[(1,)]))
     client.post("/api/query", json={"question": "  How many films?  "})
     assert asked == ["How many films?"]
+
+
+def test_schema_outage_is_a_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The schema is read on the first question; a database outage there
+    is reported like any other, without the connection details."""
+    def broken_schema(settings):
+        raise DatabaseError("Could not read the schema: host db.internal")
+
+    monkeypatch.setattr(main, "get_schema", broken_schema)
+    response = client.post("/api/query", json={"question": "q"})
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "database_unavailable"
+    assert "db.internal" not in response.text
+
+
+def test_health_is_cheap_and_reports_configuration() -> None:
+    body = client.get("/api/health").json()
+    assert body["status"] == "ok"
+    assert set(body) == {"status", "database_configured", "model", "retrieval"}
+
+
+def test_starter_chat_routes_are_gone() -> None:
+    assert client.post("/api/chat", json={"prompt": "hi"}).status_code == 404

@@ -33,3 +33,51 @@ Each entry records the decision, the alternatives considered, and why.
 **Alternatives.** `gemini-embedding-001`; `gemini-embedding-2-preview`; the full default size; an Ollama embedding model on Ben's server.
 
 **Reasoning.** `gemini-embedding-2` is the current stable model and free on the API free tier; the preview could change and invalidate stored vectors. 768 dimensions was confirmed to work, keeps rows and the index small, and stays well within index limits. Embeddings from different models cannot be compared, so changing the model means re-embedding every row; each row stores `embed_model` to catch mixing. Retrieval tables live outside `public` so generated SQL cannot read them, and are written only by a separate `nl2sql_indexer` role, never the app's reader role.
+
+## October 2026: Schema read from the database, not a file
+
+**Decision.** `nl2sql/schema.py` reads tables, columns, keys, enum and domain types from the live database as `nl2sql_reader`, once per process, and produces the prompt text, the validator's table allowlist, and one plain-text description per table for retrieval. The temporary `pagila_schema.sql` is removed.
+
+**Alternatives.** Keep a hand-written schema file; read `information_schema` instead of `pg_catalog`.
+
+**Reasoning.** A file drifts from the database the first time someone changes a table. `pg_catalog` exposes what `information_schema` hides (partitions, enum labels, domains). Payment partitions are left out so the model queries the parent table. Short text columns with at most 20 distinct values list them in the prompt (category and language names), so the model matches real spellings; columns that look personal (email, phone, address, user) never list values. Write-only foreign key clauses (`ON UPDATE CASCADE`) are trimmed to save prompt space.
+
+## October 2026: One retry when the model's SQL is fixable
+
+**Decision.** When the validator rejects SQL for a fixable reason (parse error, a table off the allowlist, a hidden column) or the database refuses it (unknown column, type error), the pipeline asks the model once more with the failed SQL and the error. Writes, dangerous functions, catalog access and statement timeouts are not retried.
+
+**Alternatives.** No retry; up to three retries; retry every failure.
+
+**Reasoning.** Most first-try failures are small mistakes the model fixes when shown the error, and one retry recovers them at the cost of one extra call. Retrying a refused write would only produce a different answer to a question that must be refused, and retrying a timeout would run another slow query. `UnsafeQueryError.fixable` carries the distinction from the validator.
+
+## October 2026: Rule-based summaries
+
+**Decision.** `summarize.py` writes the answer text from the rows with fixed rules (one value, one row, or a count plus the first three labelled rows), not with a model call.
+
+**Alternatives.** Ask the model to summarize the rows.
+
+**Reasoning.** A rule-based summary can never state a number the query did not return, adds no latency (answers with reasoning already take seconds), and is fully testable. The table, chart and SQL sit right below it, so it only needs to lead. A model summary can be revisited once evaluation shows the SQL is reliable.
+
+## October 2026: Hidden staff columns at both layers
+
+**Decision.** `staff.password` and `staff.picture` are refused by the validator (by name, through `SELECT *` on staff, and as a whole-row value) and by the database (`db/05_hide_columns.sql` swaps the reader's table grant on `staff` for column grants). `staff_list` is revoked too.
+
+**Alternatives.** Leave `staff` off the allowlist entirely; rely on the prompt not mentioning the columns.
+
+**Reasoning.** Questions about staff ("who took the most payments") are reasonable, so dropping the table loses real questions. Leaving the columns out of the prompt is not access control. Two independent layers follow the project's safety rule.
+
+## October 2026: Evaluation set and metric
+
+**Decision.** `eval/datasets/pagila_v1.jsonl` holds 75 questions on Pagila v3.1.0: 50 `test` (15 easy, 20 medium, 15 hard) that are graded, and 25 `train` that the retrieval indexer may store as examples. Execution accuracy is reported two ways: exact (same rows, column order ignored, numbers rounded to 2 places) and lenient (the answer contains every gold column, extra columns allowed). Ranked questions also compare row order.
+
+**Alternatives.** Compare SQL text; a public benchmark such as Spider.
+
+**Reasoning.** Many different queries are correct, so comparing results is the standard measure. Lenient scoring counts an answer that adds a helpful total column as correct, which matches what a user would accept; exact is reported alongside so neither hides the other. Gold queries avoid ties at any LIMIT boundary and ambiguous columns (Pagila's `active` and `activebool` disagree), and every one passes the validator. Test questions are never stored as examples, or the eval would measure memory.
+
+## October 2026: google-genai in requirements.txt
+
+**Decision.** `google-genai` goes in `backend/requirements.txt`, so the Docker image can embed questions at query time when `RETRIEVAL=on`. `requirements-ml.txt` stays for the fine-tuning stack.
+
+**Alternatives.** Keep it in `requirements-ml.txt` and install that in the image.
+
+**Reasoning.** Retrieval runs inside the web app, so its client is a runtime dependency. The fine-tuning stack (PyTorch, Unsloth) is large and never needed by the web app.
