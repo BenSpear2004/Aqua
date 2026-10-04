@@ -118,9 +118,9 @@ The frontend talks to the backend only through `/api`. Keep these shapes stable;
 | Route | Purpose |
 |---|---|
 | `GET /api/health` | Liveness and whether the database and model are configured |
-| `POST /api/query` | Body `{"question": str}`. Returns `{"sql": str, "columns": [str], "rows": [[...]], "summary": str, "error": str or null}` |
+| `POST /api/query` | Body `{"question": str}`. Returns `{"status": "success" or "error", "sql": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
 
-When validation fails, `/api/query` returns HTTP 200 with `error` set and `rows` empty, so the UI can show the rejected SQL and the reason. Server faults (database down, model unreachable) use 5xx codes.
+The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. `visualizations` and `kpis` are empty until `nl2sql/visualize.py` is wired in.
 
 ## Pipeline
 
