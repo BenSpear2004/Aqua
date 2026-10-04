@@ -3,7 +3,8 @@ import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { useReducedMotion } from "../../hooks/useReducedMotion.js";
 import { AnimationMixer, Box3, Group, Vector3 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import logoUrl from "../../assets/models/Aqua_logo.glb?url";
+import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
+import logoUrl from "../../assets/models/AQUA_V2_Final.glb?url";
 import AquaLogoFallback from "./AquaLogoFallback.jsx";
 import { ContextGuard, ModelErrorBoundary, StudioReflections } from "./ModelSupport.jsx";
 import "./model.css";
@@ -11,17 +12,29 @@ import "./model.css";
 function LogoModel({ reducedMotion, onReady }) {
   const gltf = useLoader(GLTFLoader, logoUrl);
   const { camera, size, invalidate } = useThree();
-  const { model, bounds } = useMemo(() => {
-    const source = gltf.scenes.find((scene) => scene.name === "AQUA_Logo") ?? gltf.scene;
-    const copy = source.clone(true);
-    const assetBounds = new Box3().setFromObject(copy);
+  const { model, bounds, skeletons } = useMemo(() => {
+    const source = gltf.scenes.find((scene) => scene.name === "AQUA_V2_STUDIO") ?? gltf.scene;
+    // Clone the wave's bones as well as the scene, without mutating cached GLB resources.
+    const copy = clone(source);
+    const ownedSkeletons = new Set();
+    copy.traverse((node) => {
+      if (node.isSkinnedMesh) {
+        ownedSkeletons.add(node.skeleton);
+        node.frustumCulled = false;
+      }
+    });
+    const assetBounds = new Box3().setFromObject(copy, true);
     const center = assetBounds.getCenter(new Vector3());
     const group = new Group();
     group.add(copy);
     group.position.copy(center).multiplyScalar(-1);
-    return { model: group, bounds: assetBounds.getSize(new Vector3()) };
+    return { model: group, bounds: assetBounds.getSize(new Vector3()), skeletons: ownedSkeletons };
   }, [gltf]);
   const mixerRef = useRef(null);
+
+  useEffect(() => () => {
+    skeletons.forEach((skeleton) => skeleton.dispose());
+  }, [skeletons]);
 
   useLayoutEffect(() => {
     const aspect = size.width / Math.max(size.height, 1);
@@ -41,7 +54,7 @@ function LogoModel({ reducedMotion, onReady }) {
     let renderTimer;
     let refreshVisibility;
     if (!reducedMotion) {
-      const idle = gltf.animations.find((clip) => clip.name === "AQUA_Gentle_Float");
+      const idle = gltf.animations.find((clip) => clip.name === "AQUA_Idle");
       if (idle) {
         const mixer = new AnimationMixer(model);
         mixer.clipAction(idle).play();
@@ -62,6 +75,7 @@ function LogoModel({ reducedMotion, onReady }) {
       clearInterval(renderTimer);
       if (refreshVisibility) document.removeEventListener("visibilitychange", refreshVisibility);
       mixerRef.current?.stopAllAction();
+      mixerRef.current?.uncacheRoot(model);
       mixerRef.current = null;
     };
   }, [gltf, model, onReady, reducedMotion, invalidate]);

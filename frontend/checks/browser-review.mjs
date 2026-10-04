@@ -74,10 +74,17 @@ try {
   const clickText = (text) => evaluate(`(() => { const b=[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(text)} && b.getBoundingClientRect().width); if (!b) throw Error('Missing button '+${JSON.stringify(text)}); b.click(); })()`);
   const setInput = (value) => evaluate(`(() => { const t=document.querySelector('textarea'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(t,${JSON.stringify(value)}); t.dispatchEvent(new Event('input',{bubbles:true})); t.focus(); })()`);
   const sendPrompt = async (value) => { await setInput(value); await evaluate("document.querySelector('textarea').form.requestSubmit()"); };
+  const pressKey = async (key, modifiers = 0) => {
+    const virtualKey = ({ ArrowDown:40, ArrowUp:38, Home:36, End:35, Enter:13, Escape:27, Tab:9, " ":32 })[key] ?? key.toUpperCase().charCodeAt(0);
+    const code = key === " " ? "Space" : key.length === 1 ? `Key${key.toUpperCase()}` : key;
+    const text = key === "Enter" ? "\r" : key.length === 1 ? key : undefined;
+    await cdp("Input.dispatchKeyEvent", { type:"keyDown", key, code, windowsVirtualKeyCode:virtualKey, modifiers, ...(text ? { text } : {}) });
+    await cdp("Input.dispatchKeyEvent", { type:"keyUp", key, code, windowsVirtualKeyCode:virtualKey, modifiers });
+  };
   await Promise.all([cdp("Runtime.enable"), cdp("Page.enable"), cdp("Network.enable")]);
   await cdp("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: artifactDir });
   await cdp("Browser.grantPermissions", { origin: "http://127.0.0.1:5173", permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"] });
-  if(failureMode==="missing-models") await cdp("Network.setBlockedURLs",{urls:["*/Aqua_logo.glb","*/Chatbar.glb"]});
+  if(failureMode==="missing-models") await cdp("Network.setBlockedURLs",{urls:["*/AQUA_V2_Final.glb","*/Chatbar.glb"]});
   if(failureMode==="no-webgl") await cdp("Page.addScriptToEvaluateOnNewDocument",{source:"const getContext=HTMLCanvasElement.prototype.getContext; HTMLCanvasElement.prototype.getContext=function(kind,...args){return String(kind).startsWith('webgl') ? null : getContext.call(this,kind,...args)}"});
   await cdp("Page.navigate", { url: "http://127.0.0.1:5173" });
   await cdp("Page.bringToFront");
@@ -91,23 +98,113 @@ try {
     await cdp("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:false});
     await sleep(200);
     await screenshot(`${failureMode}-mobile`);
+    await evaluate("document.querySelector('.sidebar-trigger').click()");
+    await waitFor("document.querySelector('.sidebar-drawer .model-selector__trigger') && !document.querySelectorAll('canvas').length && document.activeElement.classList.contains('sidebar-close')");
+    await evaluate("document.querySelector('.model-selector__trigger').click()");
+    await waitFor("document.querySelector('[role=menuitemradio]')");
+    await evaluate("document.querySelector('[data-model-id=\"qwen3:4b\"]').click()");
+    check(`${failureMode}: model selection works without WebGL`,await evaluate("document.querySelector('.model-selector__name').textContent==='Qwen3 4B' && !document.querySelector('[role=menu]')"));
+    await screenshot(`${failureMode}-drawer`);
     console.log(JSON.stringify({artifactDir,checks,expectedHandledErrors:errors.length,warnings}));
+  } else if (process.argv.includes("--desktop-composer")) {
+    await waitFor("document.querySelector('.chat-bar-stage--ready') && !document.querySelector('.logo-fallback')");
+    for (const [width,height] of [[1440,900],[1920,1080],[1024,768]]) {
+      await cdp("Emulation.setDeviceMetricsOverride",{width,height,deviceScaleFactor:1,mobile:false});
+      await sleep(500);
+      const dimensions = await evaluate(`(() => {
+        const stage=document.querySelector('.chat-bar-stage').getBoundingClientRect();
+        const input=document.querySelector('textarea'), button=document.querySelector('.send-button');
+        const field=input.getBoundingClientRect(), send=button.getBoundingClientRect();
+        const css=getComputedStyle(input), arrow=document.querySelector('.send-button svg').getBoundingClientRect();
+        const center=document.querySelector('.composer-surface').getBoundingClientRect().top+stage.width*0.129073*0.88/2;
+        return {width:stage.width,height:stage.height,font:parseFloat(css.fontSize),arrow:arrow.width,
+          fits:field.x>=stage.x && field.right<=stage.right && field.y>=stage.y && field.bottom<=stage.bottom && send.y>=stage.y && send.bottom<=stage.bottom && send.right<=stage.right,
+          lineFits:parseFloat(css.lineHeight)+parseFloat(css.paddingTop)+parseFloat(css.paddingBottom)<=field.height+1,
+          centered:Math.abs(field.y+field.height/2-center)<1 && Math.abs(send.y+send.height/2-center)<1 && Math.abs(arrow.y+arrow.height/2-center)<1 && Math.abs(field.y+parseFloat(css.paddingTop)+parseFloat(css.lineHeight)/2-center)<1,
+          buttonWidth:send.width,buttonHeight:send.height,overflow:document.documentElement.scrollWidth>innerWidth};
+      })()`);
+      check(`${width}: shorter desktop composer keeps its width`,Math.abs(dimensions.width-640)<0.5 && dimensions.height<=95 && !dimensions.overflow);
+      check(`${width}: text and arrow centered in glass shell`,dimensions.font===14 && dimensions.arrow===18 && dimensions.fits && dimensions.lineFits && dimensions.centered && dimensions.buttonWidth>=44 && dimensions.buttonHeight>=44);
+      await screenshot(`desktop-composer-${width}`);
+    }
+    await setInput("Desktop composer check\nSecond line");
+    check("desktop multiline input remains usable",await evaluate("document.querySelector('textarea').value.includes('\\n') && !document.querySelector('.send-button').disabled"));
+    check("two-line draft stays centered without clipping",await evaluate("(() => {const t=document.querySelector('textarea'),s=getComputedStyle(t);return Math.abs(parseFloat(s.paddingTop)-parseFloat(s.paddingBottom))<.5 && 2*parseFloat(s.lineHeight)+parseFloat(s.paddingTop)+parseFloat(s.paddingBottom)<=t.clientHeight+1})()"));
+    await screenshot("desktop-composer-multiline");
+    await pressKey("Enter");
+    await waitFor("document.querySelectorAll('.thinking-bubble').length>=5");
+    const bubbleCoverage = await evaluate(`(() => {
+      const origins=[...document.querySelectorAll('.thinking-bubble')].map(b=>parseFloat(b.style.left));
+      return {spread:Math.max(...origins)-Math.min(...origins),width:document.querySelector('.composer-surface').getBoundingClientRect().width};
+    })()`);
+    check("desktop waiting bubbles follow the resized bar",bubbleCoverage.spread>=bubbleCoverage.width*0.78);
+    await waitFor("document.querySelector('.message--aqua') && !document.querySelector('.message--forming')");
+    check("desktop Enter sends one prompt and receives a response",await evaluate("document.querySelectorAll('.message--user').length===1 && document.querySelectorAll('.message--aqua').length===1"));
+    await screenshot("desktop-composer-response");
+    await cdp("Emulation.setDeviceMetricsOverride",{width:390,height:844,deviceScaleFactor:1,mobile:false});
+    await sleep(500);
+    check("mobile retains its existing sizing",await evaluate("getComputedStyle(document.querySelector('textarea')).fontSize==='16px' && document.querySelector('.send-button svg').getBoundingClientRect().width===22 && document.querySelector('.chat-bar-stage').getBoundingClientRect().height===90"));
+    await screenshot("desktop-composer-mobile-unchanged");
+    console.log(JSON.stringify({artifactDir,checks,errors,warnings}));
   } else {
-  await waitFor("document.querySelector('textarea') && document.querySelectorAll('canvas').length === 2");
+  await waitFor("document.querySelector('textarea') && document.querySelectorAll('canvas').length === 2 && !document.querySelector('.logo-fallback')");
   await sleep(2500);
   for (const [width,height,label] of [[1440,900,"desktop"],[1024,768,"tablet"],[390,844,"mobile"]]) {
     await cdp("Emulation.setDeviceMetricsOverride", { width,height,deviceScaleFactor:1,mobile:false });
     await sleep(500);
     check(`${label}: no horizontal page overflow`, await evaluate("document.documentElement.scrollWidth <= innerWidth"));
+    check(`${label}: two bounded model canvases`, await evaluate("document.querySelectorAll('canvas').length === 2 && !document.querySelector('.sidebar-desktop canvas')"));
     await screenshot(`${label}-initial`);
+    if (label === "desktop") {
+      const before = await evaluate("[...document.querySelectorAll('.water-sparkle')].map(s=>[getComputedStyle(s).transform,getComputedStyle(s.firstElementChild).opacity])");
+      await sleep(1800);
+      const after = await evaluate("[...document.querySelectorAll('.water-sparkle')].map(s=>[getComputedStyle(s).transform,getComputedStyle(s.firstElementChild).opacity])");
+      check("water glints drift and shimmer behind interactive content", JSON.stringify(before) !== JSON.stringify(after) && await evaluate("getComputedStyle(document.querySelector('.water-sparkles')).pointerEvents === 'none' && document.querySelector('.water-sparkles').getAttribute('aria-hidden') === 'true'"));
+      await screenshot("desktop-water-shimmer");
+    }
   }
   if (process.argv.includes("--inspect")) {
     console.log(JSON.stringify({ artifactDir, checks, errors, warnings }));
   } else {
     // Interaction and motion checks are maintained below as part of the review.
     await cdp("Emulation.setDeviceMetricsOverride", { width:1440,height:900,deviceScaleFactor:1,mobile:false });
-    await sleep(500);
-    check("both production GLBs loaded", await evaluate("document.querySelector('.chat-bar-stage--ready') && !document.querySelector('.logo-fallback') && performance.getEntriesByType('resource').filter(r=>/\\.glb($|\\?)/.test(r.name)).length>=2"));
+    await waitFor("document.querySelector('.model-selector__trigger') && !document.querySelector('.logo-fallback')");
+    check("both production GLBs loaded", await evaluate("document.querySelector('.chat-bar-stage--ready') && !document.querySelector('.logo-fallback') && ['AQUA_V2_Final.glb','Chatbar.glb'].every(name=>performance.getEntriesByType('resource').some(r=>r.name.includes('/'+name)))"));
+    await evaluate("document.querySelector('.model-selector__trigger').click()");
+    await waitFor("document.activeElement.getAttribute('role')==='menuitemradio'");
+    check("model menu focuses the selected choice",await evaluate("document.activeElement.dataset.modelId==='qwen3:8b' && document.activeElement.getAttribute('aria-checked')==='true'"));
+    await screenshot("desktop-model-menu");
+    await pressKey("ArrowDown");
+    check("model menu supports arrow navigation",await evaluate("document.activeElement.dataset.modelId==='qwen3:4b'"));
+    await pressKey("ArrowDown");
+    check("model menu wraps keyboard navigation",await evaluate("document.activeElement.dataset.modelId==='qwen3:8b'"));
+    await pressKey("End");
+    check("model menu supports End",await evaluate("document.activeElement.dataset.modelId==='qwen3:4b'"));
+    await pressKey("Home");
+    check("model menu supports Home",await evaluate("document.activeElement.dataset.modelId==='qwen3:8b'"));
+    await pressKey("q");
+    check("model menu supports name typeahead",await evaluate("document.activeElement.dataset.modelId==='qwen3:4b'"));
+    await pressKey("Enter");
+    await waitFor("!document.querySelector('[role=menu]')");
+    check("keyboard selects model and restores focus",await evaluate("document.querySelector('.model-selector__name').textContent==='Qwen3 4B' && document.activeElement.classList.contains('model-selector__trigger')"));
+    await pressKey("ArrowUp");
+    await waitFor("document.querySelector('[role=menu]')");
+    await pressKey("Home");
+    await pressKey(" ");
+    await waitFor("!document.querySelector('[role=menu]')");
+    check("Space selects a model",await evaluate("document.querySelector('.model-selector__name').textContent==='Qwen3 8B'"));
+    await evaluate("document.querySelector('.model-selector__trigger').click()");
+    await pressKey("Escape");
+    check("Escape dismisses model menu and restores focus",await evaluate("!document.querySelector('[role=menu]') && document.activeElement.classList.contains('model-selector__trigger')"));
+    await evaluate("document.querySelector('.model-selector__trigger').click()");
+    await cdp("Input.dispatchMouseEvent",{type:"mousePressed",x:1000,y:500,button:"left",clickCount:1});
+    await cdp("Input.dispatchMouseEvent",{type:"mouseReleased",x:1000,y:500,button:"left",clickCount:1});
+    check("outside click dismisses model menu",await evaluate("!document.querySelector('[role=menu]')"));
+    await evaluate("document.querySelector('.model-selector__trigger').focus()");
+    await pressKey("ArrowDown");
+    await pressKey("Tab");
+    await waitFor("!document.querySelector('[role=menu]')");
+    check("Tab dismisses model menu and continues to navigation",await evaluate("document.activeElement.classList.contains('sidebar-ask')"));
     await clickText("What are my largest expenses?");
     check("FAQ fills and focuses composer", await evaluate("document.querySelector('textarea').value.includes('largest') && document.activeElement.tagName === 'TEXTAREA'"));
     await evaluate(`window.birthFrames=[]; window.bubbleFrames=[]; window.birthStarted=performance.now(); window.rafCount=0;
@@ -136,7 +233,8 @@ try {
     check("bubble pool remains bounded",Math.max(...bubbleFrames.map(f=>f.length))<=12);
     check("at least five waiting bubbles visible",Math.max(...bubbleFrames.map(f=>f.filter(b=>b.body>.3).length))>=5);
     const origins=[...new Set(bubbleFrames.flat().map(b=>Math.round(b.x)))];
-    check("bubbles cover five regions across the real bar",origins.length>=5 && Math.max(...origins)-Math.min(...origins)>600);
+    const surfaceWidth=await evaluate("document.querySelector('.composer-surface').getBoundingClientRect().width");
+    check("bubbles cover five regions across the real bar",origins.length>=5 && Math.max(...origins)-Math.min(...origins)>surfaceWidth*0.78);
     check("both tables and KPI results render", await evaluate("document.querySelectorAll('table').length === 2 && document.querySelectorAll('.kpi-card').length === 3"));
     check("charts show semantic axis labels",await evaluate("document.querySelectorAll('.recharts-xAxis').length===2 && document.querySelectorAll('.recharts-yAxis').length===2"));
     await screenshot("desktop-results");
@@ -215,7 +313,19 @@ try {
     await evaluate("document.querySelector('.sidebar-trigger').click()");
     await waitFor("document.querySelector('[role=dialog]') && document.activeElement.classList.contains('sidebar-close')");
     check("mobile drawer focuses close and inerts background",await evaluate("document.querySelector('.main-panel').inert"));
+    check("mobile drawer retains selected model without a canvas",await evaluate("document.querySelector('.model-selector__name').textContent==='Qwen3 8B' && document.querySelectorAll('canvas').length===2"));
     await screenshot("mobile-drawer");
+    await evaluate("document.querySelector('.model-selector__trigger').click()");
+    await waitFor("document.activeElement.getAttribute('role')==='menuitemradio'");
+    await screenshot("mobile-model-menu");
+    await pressKey("Escape");
+    check("first Escape closes model menu and retains mobile drawer",await evaluate("!document.querySelector('[role=menu]') && document.querySelector('[role=dialog]') && document.activeElement.classList.contains('model-selector__trigger')"));
+    await evaluate("document.querySelector('.model-selector__trigger').click()");
+    await pressKey("End");
+    await pressKey("Enter");
+    await waitFor("!document.querySelector('[role=menu]')");
+    check("mobile model selection updates without closing drawer",await evaluate("document.querySelector('.model-selector__name').textContent==='Qwen3 4B' && Boolean(document.querySelector('[role=dialog]'))"));
+    await evaluate("document.querySelector('.sidebar-close').focus()");
     await cdp("Input.dispatchKeyEvent",{type:"keyDown",key:"Tab",code:"Tab",windowsVirtualKeyCode:9,modifiers:8});
     check("drawer traps backward Tab",await evaluate("document.querySelector('[role=dialog]').contains(document.activeElement) && !document.activeElement.classList.contains('sidebar-close')"));
     await cdp("Input.dispatchKeyEvent",{type:"keyDown",key:"Tab",code:"Tab",windowsVirtualKeyCode:9});
@@ -224,6 +334,7 @@ try {
     await waitFor("!document.querySelector('[role=dialog]')");
     check("Escape returns focus and restores background",await evaluate("document.activeElement.classList.contains('sidebar-trigger') && !document.querySelector('.main-panel').inert"));
     await evaluate("document.querySelector('.sidebar-trigger').click()");
+    check("model selection survives drawer remount",await evaluate("document.querySelector('.model-selector__name').textContent==='Qwen3 4B'"));
     await clickText("What are my largest expenses?");
     await waitFor("!document.querySelector('[role=dialog]') && document.activeElement.tagName==='TEXTAREA'");
     check("mobile FAQ focuses populated composer",await evaluate("document.querySelector('textarea').value.includes('largest')"));
@@ -235,6 +346,8 @@ try {
     await screenshot("mobile-table");
     check("mobile content has no page overflow",await evaluate("document.documentElement.scrollWidth<=innerWidth"));
     await cdp("Emulation.setEmulatedMedia",{features:[{name:"prefers-reduced-motion",value:"reduce"}]});
+    await waitFor("document.querySelector('.water-sparkles--still')");
+    check("reduced motion stops background drift and shimmer",await evaluate("[...document.querySelectorAll('.water-sparkle, .water-sparkle__light')].every(s=>getComputedStyle(s).animationName==='none')"));
     await sendPrompt("no data");
     await sleep(150);
     check("reduced motion reveals promptly without decorative effects",await evaluate("!document.querySelector('.message--forming,.message-birth,.thinking-bubbles') && Boolean(document.querySelector('.processing-status'))"));

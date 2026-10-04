@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { useReducedMotion } from "./hooks/useReducedMotion.js";
 import ChatShell from "./components/chat/ChatShell.jsx";
 import Sidebar from "./components/navigation/Sidebar.jsx";
+import WaterSparkles from "./components/aqua/WaterSparkles.jsx";
 import { useChat } from "./hooks/useChat.js";
 
 export default function App() {
@@ -47,7 +48,9 @@ export default function App() {
   return (
     <div className="app-shell">
       <div className="ambient-light" aria-hidden="true" />
+      <WaterSparkles />
       <Sidebar conversations={chat.conversations} activeConversationId={chat.activeConversationId}
+        models={chat.models} selectedModelId={chat.selectedModelId} onSelectModel={chat.setModelId}
         projects={chat.projects} faqs={chat.faqs} expandedFolderIds={chat.expandedFolderIds}
         onToggleFolder={chat.toggleFolder} onStartConversation={startConversation}
         onSelectConversation={selectConversation} onSelectFAQ={selectFAQ}

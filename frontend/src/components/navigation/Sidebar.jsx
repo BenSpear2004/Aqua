@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import ModelSelector from "./ModelSelector.jsx";
 import "../../styles/sidebar.css";
 
 function NavIcon({ kind, className = "" }) {
@@ -54,14 +55,11 @@ function ProjectFolder({ folder, conversations, activeConversationId, expandedFo
   );
 }
 
-function SidebarContent({ conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder, onStartConversation, onSelectConversation, onSelectFAQ, idPrefix }) {
+function SidebarContent({ conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder, onStartConversation, onSelectConversation, onSelectFAQ, models, selectedModelId, onSelectModel, idPrefix }) {
   const recent = conversations.filter((conversation) => conversation.messages.length).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
   return (
     <>
-      <div className="sidebar-brand">
-        <span className="sidebar-brand__wordmark">AQUA<span aria-hidden="true">.</span></span>
-        <span className="sidebar-brand__subtitle">Automatic Query AI</span>
-      </div>
+      <ModelSelector models={models} selectedModelId={selectedModelId} onSelectModel={onSelectModel} />
       <button className="sidebar-ask" type="button" onClick={onStartConversation}>
         <NavIcon kind="plus" />
         <span>Ask a Question</span>
@@ -102,9 +100,13 @@ export default function Sidebar({
   onSelectConversation,
   onSelectFAQ,
   onComposerFocus,
-  backgroundRef
+  backgroundRef,
+  models,
+  selectedModelId,
+  onSelectModel
 }) {
   const [open, setOpen] = useState(false);
+  const [mobileLayout, setMobileLayout] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   const id = useId();
   const triggerRef = useRef(null);
   const dialogRef = useRef(null);
@@ -119,6 +121,16 @@ export default function Sidebar({
   };
 
   useEffect(() => {
+    const media = window.matchMedia("(max-width: 900px)");
+    const update = () => {
+      setMobileLayout(media.matches);
+      if (!media.matches) setOpen(false);
+    };
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
     if (!open) return undefined;
     const background = backgroundRef?.current;
     const wasInert = background?.inert ?? false;
@@ -129,6 +141,8 @@ export default function Sidebar({
     const focusableElements = () => [...dialogRef.current.querySelectorAll("button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])")].filter((element) => element.getClientRects().length > 0);
     const handleKey = (event) => {
       if (event.key === "Escape") {
+        // The nested selector owns Escape until its menu has been dismissed.
+        if (dialogRef.current?.querySelector('[data-model-menu-open="true"]')) return;
         event.preventDefault();
         event.stopPropagation();
         focusAfterClose.current = "trigger";
@@ -152,16 +166,12 @@ export default function Sidebar({
     const handleFocus = (event) => {
       if (!dialogRef.current?.contains(event.target)) closeRef.current?.focus();
     };
-    const media = window.matchMedia("(max-width: 900px)");
-    const handleViewport = () => { if (!media.matches) setOpen(false); };
     document.addEventListener("keydown", handleKey, true);
     document.addEventListener("focusin", handleFocus, true);
-    media.addEventListener("change", handleViewport);
     return () => {
       cancelAnimationFrame(frame);
       document.removeEventListener("keydown", handleKey, true);
       document.removeEventListener("focusin", handleFocus, true);
-      media.removeEventListener("change", handleViewport);
       if (background) background.inert = wasInert;
       document.body.style.overflow = previousOverflow;
       queueMicrotask(() => {
@@ -171,7 +181,7 @@ export default function Sidebar({
     };
   }, [open, backgroundRef]);
 
-  const data = { conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder };
+  const data = { conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder, models, selectedModelId, onSelectModel };
   const desktopActions = {
     onStartConversation: () => { onStartConversation(); onComposerFocus?.(); },
     onSelectConversation,
@@ -185,13 +195,13 @@ export default function Sidebar({
 
   return (
     <>
-      <aside className="sidebar-glass sidebar-desktop" aria-label="Workspace navigation">
+      {!mobileLayout && <aside className="sidebar-glass sidebar-desktop" aria-label="Workspace navigation">
         <SidebarContent {...data} {...desktopActions} idPrefix={`${id}-desktop`} />
-      </aside>
+      </aside>}
       <button className="sidebar-trigger" type="button" ref={triggerRef} aria-label="Open workspace navigation" aria-expanded={open} aria-controls={`${id}-drawer`} onClick={() => { focusAfterClose.current = "trigger"; setOpen(true); }}>
         <NavIcon kind="menu" />
       </button>
-      {open && createPortal(
+      {mobileLayout && open && createPortal(
         <div className="sidebar-drawer-layer">
           <div className="sidebar-drawer-scrim" aria-hidden="true" onPointerDown={() => closeDrawer()} />
           <div className="sidebar-glass sidebar-drawer" role="dialog" aria-modal="true" aria-label="Workspace navigation" id={`${id}-drawer`} ref={dialogRef} tabIndex={-1}>

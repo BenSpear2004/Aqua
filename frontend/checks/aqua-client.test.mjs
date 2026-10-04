@@ -61,6 +61,23 @@ test("legacy promise requests, safe errors, retry and no-data remain supported",
   assert.match(empty.message, /No matching/);
 });
 
+test("concurrent model choices retain their own streaming request context", async () => {
+  const entries = [];
+  const options = { prompt: "explain detailed", modelId: "qwen3:8b", conversationId: "model-a", requestId: "request-a" };
+  const first = sendMessage({ ...options, onContent: (_, context) => entries.push(context) });
+  options.modelId = "qwen3:4b";
+  const second = retryMessage({ ...options, conversationId: "model-b", requestId: "request-b", onContent: (_, context) => entries.push(context) });
+  const responses = await Promise.all([first, second]);
+  assert.ok(responses.every((response) => response.status === "success"));
+  assert.ok(entries.some((context) => context.requestId === "request-a"));
+  assert.ok(entries.some((context) => context.requestId === "request-b"));
+  for (const context of entries) {
+    assert.deepEqual(context, context.requestId === "request-a"
+      ? { conversationId: "model-a", requestId: "request-a", modelId: "qwen3:8b" }
+      : { conversationId: "model-b", requestId: "request-b", modelId: "qwen3:4b" });
+  }
+});
+
 test("abort stops both waiting requests and an active simulated stream", async () => {
   const waiting = new AbortController();
   const cancelled = sendMessage({ prompt: "expenses", signal: waiting.signal });

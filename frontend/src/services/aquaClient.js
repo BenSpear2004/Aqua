@@ -23,7 +23,7 @@ function wait(delay, signal) {
 
 // Keep all transport/mock timing here. Optional callbacks exercise a cumulative
 // text stream; the Promise still resolves the original complete response shape.
-async function mockRequest({ prompt, conversationId, requestId, signal, onFirstContent, onContent }, retrying = false) {
+async function mockRequest({ prompt, conversationId, requestId, modelId, signal, onFirstContent, onContent }, retrying = false) {
   await wait(MOCK_DELAY_MS, signal);
   const query = retrying ? prompt.replace(/\b(error|fail|retry)\b/gi, "financial") : prompt;
   const response = createMockResponse(query);
@@ -31,7 +31,7 @@ async function mockRequest({ prompt, conversationId, requestId, signal, onFirstC
 
   const message = response.message ?? "";
   const steps = Math.min(6, Math.max(1, Math.ceil(message.length / 65)));
-  const context = { conversationId, requestId };
+  const context = { conversationId, requestId, ...(modelId ? { modelId } : {}) };
   for (let step = 1; step <= steps; step += 1) {
     if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
     const fragment = { status: "streaming", message: message.slice(0, Math.ceil(message.length * step / steps)), tables: [], visualizations: [], kpis: [] };
