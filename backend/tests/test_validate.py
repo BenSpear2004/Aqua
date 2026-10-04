@@ -43,10 +43,10 @@ UNSAFE = [
     ("DELETE FROM film WHERE film_id = 1", "got DELETE"),
     ("UPDATE film SET title = 'x'", "got UPDATE"),
     ("INSERT INTO film (title) SELECT 'x'", "got INSERT"),
-    ("SHOW TABLES", "got SHOW"),
-    ("EXPLAIN SELECT 1", "got DESCRIBE"),
+    ("SHOW TABLES", "Only SELECT queries are allowed"),
+    ("EXPLAIN SELECT 1", "Only SELECT queries are allowed"),
     ("GRANT ALL ON *.* TO someone", "got COMMAND"),
-    ("REPLACE INTO film (film_id) VALUES (1)", "got COMMAND"),
+    ("REPLACE INTO film (film_id) VALUES (1)", "could not be parsed"),  # MySQL-only syntax
     ("SELECT * FROM film FOR UPDATE", "forbidden operation: LOCK"),
     ("SELECT * FROM film LOCK IN SHARE MODE", "forbidden operation: LOCK"),
     ("SELECT * INTO OUTFILE '/tmp/x' FROM film", "could not be parsed"),
@@ -332,3 +332,35 @@ def test_read_only_cte_still_passes_in_postgres() -> None:
     """The WITH rejections above are about writes, not WITH itself."""
     sql = "WITH x AS (SELECT * FROM film) SELECT * FROM x"
     assert isinstance(validate_sql(sql, dialect="postgres"), exp.Query)
+
+
+# ---- Postgres is the default ----
+
+
+def test_default_dialect_is_postgres() -> None:
+    """Backtick quoting is MySQL syntax, so it only parses when the
+    validator is reading MySQL. With no dialect given it must not."""
+    with pytest.raises(UnsafeQueryError, match="could not be parsed"):
+        validate_sql("SELECT `title` FROM film")
+    assert isinstance(validate_sql("SELECT `title` FROM film", dialect="mysql"), exp.Query)
+
+
+# Extension schemas on our Tiger Cloud database (TimescaleDB and its
+# toolkit). Internal bookkeeping, never Pagila data.
+TIMESCALE_SCHEMAS = [
+    "_timescaledb_cache",
+    "_timescaledb_catalog",
+    "_timescaledb_config",
+    "_timescaledb_functions",
+    "_timescaledb_internal",
+    "timescale_functions",
+    "timescaledb_experimental",
+    "timescaledb_information",
+    "toolkit_experimental",
+]
+
+
+@pytest.mark.parametrize("schema", TIMESCALE_SCHEMAS)
+def test_timescaledb_schemas_are_blocked(schema: str) -> None:
+    with pytest.raises(UnsafeQueryError, match="system catalog"):
+        validate_sql(f"SELECT * FROM {schema}.hypertable")
