@@ -54,6 +54,8 @@ class Column:
     not_null: bool
     # Distinct values, only for short text columns (see MAX_LISTED_VALUES).
     values: tuple[str, ...] = ()
+    # The column's database comment, e.g. what a code like PRIJEM means.
+    comment: str = ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,10 @@ class Table:
     constraints: tuple[str, ...]
     # Tables this one has a foreign key to.
     references: frozenset[str]
+    # The table's database comment.
+    comment: str = ""
+    # The name as SQL must write it: "order" is quoted, film is not.
+    quoted_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -141,6 +147,8 @@ class Schema:
             f"Table {table.name.replace('_', ' ')} ({table.name}). Columns: {columns}."
         )
         joined = sorted(self.related([table.name]) - {table.name})
+        if table.comment:
+            text += f" {table.comment}"
         if joined:
             text += f" Joins to: {', '.join(joined)}."
         listed = [c for c in table.columns if c.values]
@@ -153,12 +161,31 @@ def _quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _display_value(value: str) -> str:
+    """A listed value as the prompt shows it.
+
+    Padding is trimmed (Pagila's character(20) names), but a value that
+    is only blanks is shown quoted, because ' ' and '' are different
+    values and the model has to write the right one.
+    """
+    return _quote(value) if not value.strip() else value.strip()
+
+
+def _one_line(text: str | None) -> str:
+    """A database comment on one line; None (no comment) becomes ''."""
+    return " ".join((text or "").split())
+
+
 def _create_table(table: Table) -> str:
     lines = []
     for c in table.columns:
         line = f"  {c.name} {c.type}" + (" NOT NULL" if c.not_null else "")
+        notes = c.comment
         if c.values:
-            line += f"  -- values: {', '.join(c.values)}"
+            listed = ", ".join(c.values)
+            notes = f"{notes} Values: {listed}" if notes else f"values: {listed}"
+        if notes:
+            line += f"  -- {notes}"
         lines.append(line)
     lines += [f"  {text}" for text in table.constraints]
     # Commas go between items, before any trailing "-- values" comment.
@@ -167,13 +194,14 @@ def _create_table(table: Table) -> str:
         last = i == len(lines) - 1
         head, sep, comment = line.partition("  -- ")
         body.append(head + ("" if last else ",") + (f"  -- {comment}" if sep else ""))
-    return f"CREATE TABLE {table.name} (\n" + "\n".join(body) + "\n);"
+    head = f"-- {table.comment}\n" if table.comment else ""
+    return head + f"CREATE TABLE {table.quoted_name or table.name} (\n" + "\n".join(body) + "\n);"
 
 
 # Ordinary and partitioned tables in public, without the monthly payment
 # partitions: queries use the parent table.
 _TABLES_SQL = """
-SELECT c.oid, c.relname
+SELECT c.oid, c.relname, obj_description(c.oid, 'pg_class'), quote_ident(c.relname)
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
@@ -181,7 +209,8 @@ ORDER BY c.relname
 """
 
 _COLUMNS_SQL = """
-SELECT a.attrelid, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull
+SELECT a.attrelid, a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+       col_description(a.attrelid, a.attnum)
 FROM pg_attribute a
 WHERE a.attrelid = ANY(%s) AND a.attnum > 0 AND NOT a.attisdropped
 ORDER BY a.attrelid, a.attnum
@@ -222,7 +251,7 @@ def _listed_values(
     rows = conn.execute(query, (MAX_LISTED_VALUES + 1,)).fetchall()
     if len(rows) > MAX_LISTED_VALUES:
         return ()
-    return tuple(sorted(r[0].strip() for r in rows))
+    return tuple(sorted(_display_value(r[0]) for r in rows))
 
 
 def load_schema(conn: psycopg.Connection) -> Schema:
@@ -233,13 +262,15 @@ def load_schema(conn: psycopg.Connection) -> Schema:
     still blocks generated SQL from touching the catalogs.
     """
     tables_rows = conn.execute(_TABLES_SQL).fetchall()
-    oids = [oid for oid, _ in tables_rows]
-    names = {oid: name for oid, name in tables_rows}
+    oids = [oid for oid, _, _, _ in tables_rows]
+    names = {oid: name for oid, name, _, _ in tables_rows}
+    table_comments = {oid: _one_line(comment) for oid, _, comment, _ in tables_rows}
+    quoted = {oid: q for oid, _, _, q in tables_rows}
 
-    columns: dict[int, list[tuple[str, str, bool]]] = {oid: [] for oid in oids}
-    for oid, name, type_name, not_null in conn.execute(_COLUMNS_SQL, (oids,)):
+    columns: dict[int, list[tuple[str, str, bool, str]]] = {oid: [] for oid in oids}
+    for oid, name, type_name, not_null, comment in conn.execute(_COLUMNS_SQL, (oids,)):
         if (names[oid], name) not in HIDDEN_COLUMNS:
-            columns[oid].append((name, type_name, not_null))
+            columns[oid].append((name, type_name, not_null, _one_line(comment)))
 
     constraints: dict[int, list[str]] = {oid: [] for oid in oids}
     references: dict[int, set[str]] = {oid: set() for oid in oids}
@@ -257,16 +288,18 @@ def load_schema(conn: psycopg.Connection) -> Schema:
     for oid in oids:
         name = names[oid]
         cols = []
-        for col_name, type_name, not_null in columns[oid]:
+        for col_name, type_name, not_null, comment in columns[oid]:
             values: tuple[str, ...] = ()
             if _TEXT_TYPE.match(type_name) and not _PERSONAL.search(col_name):
                 values = _listed_values(conn, name, col_name)
-            cols.append(Column(col_name, type_name, not_null, values))
+            cols.append(Column(col_name, type_name, not_null, values, comment))
         tables[name.lower()] = Table(
             name=name,
             columns=tuple(cols),
             constraints=tuple(constraints[oid]),
             references=frozenset(references[oid]),
+            comment=table_comments[oid],
+            quoted_name=quoted[oid],
         )
     return Schema(
         tables=tables,
