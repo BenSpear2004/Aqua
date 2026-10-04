@@ -6,6 +6,7 @@ changes. From backend/, with INDEXER_DATABASE_URL and GEMINI_API_KEY set:
 
     python -m nl2sql.retrieval.store            # update what changed
     python -m nl2sql.retrieval.store --dry-run  # show what would change
+    python -m nl2sql.retrieval.store --no-examples  # tables only, no question set yet
 
 Reads the schema as the reader role and writes only as nl2sql_indexer,
 which can touch the retrieval schema and nothing else. Only rows whose
@@ -25,6 +26,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import psycopg
 from sqlglot import exp
@@ -178,6 +180,16 @@ def sync_examples(
     }
 
 
+def same_service(first: str, second: str) -> bool:
+    """True when two connection URLs reach the same host, port and database."""
+
+    def where(url: str) -> tuple:
+        parts = urlsplit(url)
+        return (parts.hostname, parts.port or 5432, parts.path.lstrip("/"))
+
+    return where(first) == where(second)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Embed the schema and training examples into the retrieval schema."
@@ -188,15 +200,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="report what would change, embed nothing"
     )
+    parser.add_argument(
+        "--no-examples",
+        action="store_true",
+        help="embed the tables only and remove stored training examples; for a "
+        "database with no question set yet",
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings()
     if not settings.indexer_database_url:
         print("INDEXER_DATABASE_URL is not set. See .env.example.")
         return 1
+    if not same_service(settings.database_url, settings.indexer_database_url):
+        print(
+            "DATABASE_URL and INDEXER_DATABASE_URL point at different services. "
+            "Both must use the same host and port, or one service's tables would "
+            "be embedded into the other's index."
+        )
+        return 1
     try:
         schema = get_schema(settings)
-        examples = load_examples(args.dataset, schema)
+        examples = [] if args.no_examples else load_examples(args.dataset, schema)
         with psycopg.connect(settings.indexer_database_url, connect_timeout=10) as conn:
             report = sync_schema_docs(conn, schema, settings, args.dry_run)
             report |= sync_examples(conn, examples, settings, args.dry_run)
