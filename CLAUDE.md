@@ -79,6 +79,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   │   ├── validate.py       AST safety checks (layer 1)
 │   │   ├── execute.py        Runs validated SQL in a read-only transaction
 │   │   ├── summarize.py      Turns result rows into a short answer
+│   │   ├── visualize.py      Picks a chart for a result (first version; Ben owns it)
 │   │   ├── pipeline.py       question -> prompt -> SQL -> validate -> execute -> summarize
 │   │   ├── retrieval/        Phase 4: embed.py, store.py, select.py
 │   │   └── querylog.py       Phase 7: logs questions, SQL, outcome
@@ -121,6 +122,8 @@ The frontend talks to the backend only through `/api`. Keep these shapes stable;
 | `POST /api/query` | Body `{"question": str}`. Returns `{"sql": str, "columns": [str], "rows": [[...]], "summary": str, "error": str or null}` |
 
 When validation fails, `/api/query` returns HTTP 200 with `error` set and `rows` empty, so the UI can show the rejected SQL and the reason. Server faults (database down, model unreachable) use 5xx codes.
+
+Proposed, not yet part of the contract: a `chart` field produced by `nl2sql/visualize.py`, for example `{"type": "bar", "x": ["title"], "y": "rental_count"}`, or `null` when a table fits best. Ben decides whether and how it is added; until then the frontend should not rely on it.
 
 ## Pipeline
 
