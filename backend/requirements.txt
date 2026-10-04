@@ -7,3 +7,5 @@ sqlglot>=30.18,<31
 pytest>=9,<10
 python-dotenv>=1,<2
 google-genai>=2.28,<3
+google-auth[requests]>=2,<3
+itsdangerous>=2.2,<3

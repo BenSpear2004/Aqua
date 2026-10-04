@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createInitialChatState, PROJECTS } from "../src/mocks/navigation.js";
-import { sendMessage, retryMessage } from "../src/services/mockClient.js";
+import { sendMessage as requestMessage, retryMessage as requestRetry } from "../src/services/aquaClient.js";
+
+// These checks intentionally exercise the opt-in visual demo transport.
+const sendMessage = (options) => requestMessage({ ...options, demoMode: true });
+const retryMessage = (options) => requestRetry({ ...options, demoMode: true });
+
+test("live sessions start with an empty conversation and no fictional history", () => {
+  const state = createInitialChatState({ demoMode: false });
+  assert.equal(state.conversations.length, 1);
+  assert.deepEqual(state.conversations[0].messages, []);
+  assert.deepEqual(state.expandedFolderIds, []);
+});
 
 test("project folders reference the same distinct centralized conversations", () => {
   const state = createInitialChatState();

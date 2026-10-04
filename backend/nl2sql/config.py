@@ -13,16 +13,21 @@ but wrong raise an error.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+from nl2sql.auth_config import normalize_app_origin
+
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 DEFAULT_GEMINI_MODEL = "gemma-4-31b-it"
 DEFAULT_GEMINI_EMBED_MODEL = "gemini-embedding-2"
+DEFAULT_APP_ORIGIN = "https://aqua-ai.us"
+DEFAULT_SESSION_MAX_AGE_SECONDS = 3600
 
 # Where SQL generation runs when LLM_PROVIDER is not set. Production sets
 # gemini (free Gemma 4) in .env; the API can also pick one per request.
@@ -36,6 +41,7 @@ ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
+_GOOGLE_CLIENT_ID = re.compile(r"[A-Za-z0-9_-]+\.apps\.googleusercontent\.com")
 
 
 class ConfigError(RuntimeError):
@@ -75,6 +81,15 @@ class Settings:
     # Retrieve relevant tables and examples per question (Phase 4). Off
     # until the indexer has run and the eval shows it helps.
     retrieval: bool = False
+    # Google sign-in uses an ID token, not the Gemini model API key.
+    google_client_id: str = ""
+    session_secret: str = field(default="", repr=False)
+    app_origin: str = DEFAULT_APP_ORIGIN
+    session_max_age_seconds: int = DEFAULT_SESSION_MAX_AGE_SECONDS
+    # Empty allowlists grant no access. Google subjects are case-sensitive;
+    # email entries are normalized to lowercase when loading configuration.
+    auth_allowed_google_subs: frozenset[str] = field(default_factory=frozenset)
+    auth_allowed_emails: frozenset[str] = field(default_factory=frozenset)
 
 
 def _flag(name: str, value: str) -> bool:
@@ -85,6 +100,14 @@ def _flag(name: str, value: str) -> bool:
     if lowered in _FALSE:
         return False
     raise ConfigError(f"{name} must be true or false, got {value!r}.")
+
+
+def _comma_set(value: str, *, lowercase: bool = False) -> frozenset[str]:
+    """Trim comma-separated allowlist entries and discard empty entries."""
+    entries = (entry.strip() for entry in value.split(","))
+    return frozenset(
+        entry.lower() if lowercase else entry for entry in entries if entry
+    )
 
 
 def settings_from(environ: Mapping[str, str]) -> Settings:
@@ -113,6 +136,31 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
     think = get("OLLAMA_THINK")
     retrieval = get("RETRIEVAL")
     fallback = get("LLM_FALLBACK")
+    google_client_id = get("GOOGLE_CLIENT_ID")
+    if google_client_id and not _GOOGLE_CLIENT_ID.fullmatch(google_client_id):
+        raise ConfigError(
+            "GOOGLE_CLIENT_ID must be a valid Google web application client ID."
+        )
+    session_secret = get("SESSION_SECRET")
+    if session_secret and len(session_secret) < 32:
+        raise ConfigError("SESSION_SECRET must contain at least 32 characters.")
+    session_max_age = get("SESSION_MAX_AGE_SECONDS")
+    try:
+        session_max_age_seconds = (
+            int(session_max_age) if session_max_age else DEFAULT_SESSION_MAX_AGE_SECONDS
+        )
+    except ValueError:
+        raise ConfigError(
+            "SESSION_MAX_AGE_SECONDS must be an integer between 300 and 86400."
+        ) from None
+    if not 300 <= session_max_age_seconds <= 86400:
+        raise ConfigError(
+            "SESSION_MAX_AGE_SECONDS must be an integer between 300 and 86400."
+        )
+    try:
+        app_origin = normalize_app_origin(get("APP_ORIGIN") or DEFAULT_APP_ORIGIN)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
     return Settings(
         ollama_base_url=base_url.rstrip("/"),
         ollama_model=get("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL,
@@ -125,6 +173,12 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
         llm_provider=provider,
         llm_fallback=_flag("LLM_FALLBACK", fallback) if fallback else True,
         retrieval=_flag("RETRIEVAL", retrieval) if retrieval else False,
+        google_client_id=google_client_id,
+        session_secret=session_secret,
+        app_origin=app_origin,
+        session_max_age_seconds=session_max_age_seconds,
+        auth_allowed_google_subs=_comma_set(get("AUTH_ALLOWED_GOOGLE_SUBS")),
+        auth_allowed_emails=_comma_set(get("AUTH_ALLOWED_EMAILS"), lowercase=True),
     )
 
 

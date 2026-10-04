@@ -2,13 +2,16 @@
 turns requests into pipeline calls and pipeline results into JSON."""
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from auth.router import router as auth_router
+from auth.security import UserSession, require_database_access
 from nl2sql.config import load_settings
 from nl2sql.db import DatabaseError
 from nl2sql.display import display_for
@@ -21,6 +24,22 @@ app = FastAPI(title="Aqua")
 log = logging.getLogger("aqua")
 
 SETTINGS = load_settings()
+app.state.settings = SETTINGS
+app.include_router(auth_router)
+
+
+@app.middleware("http")
+async def private_api_responses(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Keep identity and customer query results out of shared HTTP caches."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        vary = response.headers.get("Vary", "")
+        if "cookie" not in {part.strip().lower() for part in vary.split(",")}:
+            response.headers["Vary"] = f"{vary}, Cookie" if vary else "Cookie"
+    return response
 
 
 def _retriever() -> Retriever | None:
@@ -97,8 +116,11 @@ class QueryRequest(BaseModel):
     model: Literal["ollama", "gemini"] | None = None
 
 
-@app.post("/api/query")
-def query(request: QueryRequest):
+@app.post("/api/query", response_model=None)
+def query(
+    request: QueryRequest,
+    session: UserSession = Depends(require_database_access),
+) -> dict[str, Any] | JSONResponse:
     """Answer a question with SQL, rows and the SQL that produced them.
 
     A plain def (not async): FastAPI runs it in a worker thread, so a

@@ -5,6 +5,9 @@
 const TOO_FAST = "You're asking questions faster than AQUA can answer them. Wait a moment and try again.";
 const UNREACHABLE = "AQUA couldn't reach its server. Check your connection and try again.";
 const BAD_QUESTION = "That question is empty or too long. Keep it under 2,000 characters.";
+const SIGN_IN = "Please sign in to ask AQUA a question.";
+const SESSION_ENDED = "Your session has ended. Please sign in again.";
+const NO_ACCESS = "Your account cannot access this data right now. Please check your access and try again.";
 
 function errorResponse(code, message, retryable, sql = "") {
   return { status: "error", sql, message: "", tables: [], visualizations: [], kpis: [], error: { code, message, retryable } };
@@ -21,8 +24,18 @@ function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+// A reply that is not the documented shape is never rendered as data: it
+// could be a proxy page, a partial body, or a bug, and showing it as a
+// table would mislead. It becomes a retryable error instead.
+function wellFormed(body) {
+  return Boolean(body) && typeof body === "object"
+    && ["success", "error"].includes(body.status)
+    && typeof body.message === "string"
+    && ["tables", "visualizations", "kpis"].every((key) => Array.isArray(body[key]));
+}
+
 export function normalizeResponse(body) {
-  if (!body || typeof body !== "object") return errorResponse("unexpected", UNREACHABLE, true);
+  if (!wellFormed(body)) return errorResponse("unavailable", UNREACHABLE, true);
   const sql = typeof body.sql === "string" ? body.sql : "";
   if (body.status === "error") {
     const code = body.error?.code || "unexpected";
@@ -47,12 +60,23 @@ function apiUrl(baseUrl, path) {
   return `${(baseUrl || "").replace(/\/+$/, "")}${path}`;
 }
 
-export async function queryApi({ prompt, modelId, signal }, { baseUrl = "", fetchImpl = globalThis.fetch } = {}) {
+// Questions need a signed-in session: the cookie travels with the request,
+// and the CSRF token from /api/auth goes in a header the backend checks.
+// 401 and 403 come back as sign_in_required and access_denied, which
+// useChat answers by refreshing the sign-in state.
+export async function queryApi(
+  { prompt, modelId, csrfToken, signal },
+  { baseUrl = "", fetchImpl = globalThis.fetch } = {}
+) {
+  if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+  if (!csrfToken) return errorResponse("sign_in_required", SIGN_IN, false);
   let response;
   try {
     response = await fetchImpl(apiUrl(baseUrl, "/api/query"), {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "X-CSRF-Token": csrfToken },
       body: JSON.stringify({ question: prompt, ...(modelId ? { model: modelId } : {}) }),
       signal
     });
@@ -61,6 +85,8 @@ export async function queryApi({ prompt, modelId, signal }, { baseUrl = "", fetc
     return errorResponse("unavailable", UNREACHABLE, true);
   }
 
+  if (response.status === 401) return errorResponse("sign_in_required", SESSION_ENDED, false);
+  if (response.status === 403) return errorResponse("access_denied", NO_ACCESS, false);
   if (response.status === 429) return errorResponse("rate_limited", TOO_FAST, true);
   if (response.status === 422) return errorResponse("invalid_question", BAD_QUESTION, false);
 
@@ -77,7 +103,9 @@ export async function queryApi({ prompt, modelId, signal }, { baseUrl = "", fetc
 
 export async function fetchModels({ baseUrl = "", fetchImpl = globalThis.fetch, signal } = {}) {
   try {
-    const response = await fetchImpl(apiUrl(baseUrl, "/api/models"), { headers: { Accept: "application/json" }, signal });
+    const response = await fetchImpl(apiUrl(baseUrl, "/api/models"), {
+      credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" }, signal
+    });
     if (!response.ok) return [];
     const body = await response.json();
     return asArray(body?.models).filter((model) => model && typeof model.id === "string" && typeof model.name === "string");

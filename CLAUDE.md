@@ -33,6 +33,7 @@ The server runs the app with docker-compose. Code changes are made locally, push
 |---|---|
 | Backend language | Python 3.12 (not 3.14; the ML stack does not fully support 3.14 yet) |
 | API | FastAPI, served by uvicorn on 127.0.0.1:8000, reachable from outside only through nginx |
+| Sign-in | Google Identity Services, verified server-side; signed expiring cookies, no account database |
 | Frontend | React 19 with Vite. Production: a static build served by nginx on port 5173, which forwards `/api` to the backend and rate-limits questions. Development: `npm run dev`, whose proxy does the same |
 | Database | PostgreSQL on Tiger Cloud free service (TimescaleDB, pgvector, pgvectorscale) |
 | Sample data | Pagila (Postgres port of Sakila) |
@@ -102,7 +103,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   └── src/
 │       ├── services/aquaClient.js  The only API entry point components use
 │       ├── services/apiClient.js   Real transport: /api/query, /api/models, error mapping
-│       └── services/mockClient.js  Offline stand-in, on with VITE_AQUA_USE_MOCK=true
+│       └── services/mockClient.js  Offline stand-in, on with VITE_AQUA_DEMO_MODE=true
 ├── db/
 │   ├── README.md             How to rebuild the database from scratch
 │   ├── 01_extensions.sql     vector, vectorscale
@@ -121,7 +122,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
     └── decisions.md          Every significant choice and why
 ```
 
-Directories that only hold a `.gitkeep` are placeholders. `backend/Dockerfile` copies `main.py` and the whole `nl2sql/` package; `eval/` and `db/` stay out of the image.
+Directories that only hold a `.gitkeep` are placeholders. `backend/Dockerfile` copies `main.py`, `auth/` (Google verification, sessions and access checks), and the whole `nl2sql/` package; `eval/` and `db/` stay out of the image.
 
 ## API contract
 
@@ -130,10 +131,16 @@ The frontend talks to the backend only through `/api`, which in production goes 
 | Route | Purpose |
 |---|---|
 | `GET /api/health` | Liveness for the Docker healthcheck: `status`, `database_configured`, `model`, `retrieval`. Never touches the database or model |
+| `GET /api/auth/config` | Returns `client_id`, `nonce`, and `csrf_token`; sets the signed login challenge cookie |
+| `POST /api/auth/google` | Body `{"credential": str}` plus `X-CSRF-Token` from config and matching `Origin`. Verifies Google's token and nonce, sets the Aqua session, returns `user`, `csrf_token`, and `can_query` |
+| `GET /api/auth/me` | Requires an Aqua session; returns `user`, `csrf_token`, and `can_query` |
+| `POST /api/auth/logout` | Requires session, matching `Origin`, and session `X-CSRF-Token`; clears the cookie and returns 204 |
 | `GET /api/models` | `{"models": [{"id", "name", "description"}]}`, server default first. Lists `gemini` only when `GEMINI_API_KEY` is set |
-| `POST /api/query` | Body `{"question": str, "model": "ollama" or "gemini" (optional)}`. Returns `{"status": "success" or "error", "sql": str, "model": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
+| `POST /api/query` | Requires session, matching `Origin`, session `X-CSRF-Token`, and an approved account. Body `{"question": str, "model": "ollama" or "gemini" (optional)}`. Returns `{"status": "success" or "error", "sql": str, "model": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
 
 The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. An unknown `model` is also a 422. Choosing `gemini` on a server with no key returns 400 with code `model_not_configured` and `retryable` false. `message` is a rule-based summary from `summarize.py`. `visualizations` and `kpis` come from `visualize.py`: a single number gives one KPI (`{"id", "label", "value", "type"}`) plus a `{"type": "kpi"}` visualization; labels with a measure give a `bar`, a date with a measure a `line`, each `{"id", "type", "title", "tableId": "result", "xKey", "yKey"}`; anything else leaves both empty. The frontend draws one x column, so a chart labelled by first and last name uses the first.
+
+Health and the model list remain public. Auth configuration or query access returns 503 when the Google client ID or session secret is missing; invalid or expired sessions return 401, and failed CSRF or account access checks return 403. Every `/api` response uses `Cache-Control: no-store`. Authentication does not grant database access: empty account allowlists deny all queries. Email approval is restricted to verified Gmail or Google Workspace identities; other Google accounts require their verified Google `sub` in the subject allowlist. The frontend uses Google's sign-in button on a dedicated `/signin` page, restores sessions, and sends live queries with the session CSRF token. Only approved live sessions enter the workspace at `/`; logout or session/access failure clears it and returns to `/signin`. nginx serves `index.html` for direct `/signin`, `/privacy` and `/terms` visits while `/api/*` stays routed to Python. `VITE_AQUA_DEMO_MODE=true` explicitly enables fictional sample data for local demonstrations. See `docs/google-signin.md` for setup and integration.
 
 Charts use the existing `visualizations` and `kpis` fields described above; there is no separate `chart` field. Ben owns `visualize.py` and decides any change to how charts are chosen or shaped.
 
@@ -187,9 +194,17 @@ GEMINI_EMBED_MODEL=gemini-embedding-2
 DATABASE_URL=postgresql://nl2sql_reader:CHANGE_ME@HOST:PORT/tsdb?sslmode=require
 INDEXER_DATABASE_URL=postgresql://nl2sql_indexer:CHANGE_ME@HOST:PORT/tsdb?sslmode=require
 RETRIEVAL=off
+GOOGLE_CLIENT_ID=
+SESSION_SECRET=
+APP_ORIGIN=https://aqua-ai.us
+SESSION_MAX_AGE_SECONDS=3600
+AUTH_ALLOWED_EMAILS=
+AUTH_ALLOWED_GOOGLE_SUBS=
 ```
 
 Production sets `RETRIEVAL=on` once the index is built (see Commands). Read them only through `backend/nl2sql/config.py`. docker-compose passes `.env` to the backend container. Gemini rate limits are per Google Cloud project, so each developer uses an AI Studio key from their own project and the server at `/srv/bank-ai` uses a separate one.
+
+`SESSION_SECRET` must contain at least 32 characters and be randomly generated; never expose it to the frontend. Session lifetime is 300 through 86400 seconds. `APP_ORIGIN` is the browser's exact HTTPS origin; loopback HTTP is supported for local development. Account allowlists are comma-separated and are checked before any schema, database, or model work. They govern the single configured database, not customer database selection. No database stores Aqua accounts or sessions.
 
 ## Phases
 
@@ -253,7 +268,7 @@ python eval/run_eval.py                # baseline: every table, no examples
 python eval/run_eval.py --retrieval    # with retrieval, for the Phase 4 comparison
 ```
 
-Local frontend development (run from `frontend/`; the backend must be running on port 8000, or set `VITE_AQUA_USE_MOCK=true` to work offline):
+Local frontend development (run from `frontend/`; the backend must be running on port 8000, or set `VITE_AQUA_DEMO_MODE=true` to work offline):
 
 ```bash
 npm install

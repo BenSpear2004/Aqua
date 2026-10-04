@@ -29,7 +29,7 @@ const SUCCESS = {
 
 test("questions go to POST /api/query with the chosen model", async () => {
   const { calls, fetchImpl } = fakeFetch(jsonReply(200, SUCCESS));
-  const response = await queryApi({ prompt: "How many films?", modelId: "gemini" }, { baseUrl: "https://api.example/", fetchImpl });
+  const response = await queryApi({ prompt: "How many films?", modelId: "gemini", csrfToken: "t" }, { baseUrl: "https://api.example/", fetchImpl });
   assert.equal(calls[0].url, "https://api.example/api/query");
   assert.equal(calls[0].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[0].init.body), { question: "How many films?", model: "gemini" });
@@ -41,7 +41,7 @@ test("questions go to POST /api/query with the chosen model", async () => {
 
 test("without a model the server default is used", async () => {
   const { calls, fetchImpl } = fakeFetch(jsonReply(200, SUCCESS));
-  await queryApi({ prompt: "q" }, { fetchImpl });
+  await queryApi({ prompt: "q", csrfToken: "t" }, { fetchImpl });
   assert.equal(calls[0].url, "/api/query");
   assert.deepEqual(JSON.parse(calls[0].init.body), { question: "q" });
 });
@@ -51,7 +51,7 @@ test("refused queries keep the SQL and explain the refusal", async () => {
     status: "error", sql: "DELETE FROM film", message: "", tables: [], visualizations: [], kpis: [],
     error: { code: "rejected", message: "Only SELECT queries are allowed, got DELETE.", retryable: false }
   }));
-  const response = await queryApi({ prompt: "Delete every film" }, { fetchImpl });
+  const response = await queryApi({ prompt: "Delete every film", csrfToken: "t" }, { fetchImpl });
   assert.equal(response.status, "error");
   assert.equal(response.sql, "DELETE FROM film");
   assert.equal(response.error.retryable, false);
@@ -61,41 +61,66 @@ test("refused queries keep the SQL and explain the refusal", async () => {
 
 test("outages are retryable and keep the server's safe message", async () => {
   const { fetchImpl } = fakeFetch(jsonReply(503, {
-    status: "error", sql: "", error: { code: "model_unavailable", message: "The language model is not reachable right now.", retryable: true }
+    status: "error", sql: "", message: "", tables: [], visualizations: [], kpis: [], error: { code: "model_unavailable", message: "The language model is not reachable right now.", retryable: true }
   }));
-  const response = await queryApi({ prompt: "q" }, { fetchImpl });
+  const response = await queryApi({ prompt: "q", csrfToken: "t" }, { fetchImpl });
   assert.equal(response.error.code, "model_unavailable");
   assert.equal(response.error.retryable, true);
   assert.equal(response.error.message, "The language model is not reachable right now.");
 });
 
 test("rate limits, bad questions, proxy pages and network failures become friendly errors", async () => {
-  const limited = await queryApi({ prompt: "q" }, fakeFetch(jsonReply(429, null)));
+  const limited = await queryApi({ prompt: "q", csrfToken: "t" }, fakeFetch(jsonReply(429, null)));
   assert.equal(limited.error.code, "rate_limited");
   assert.equal(limited.error.retryable, true);
 
-  const invalid = await queryApi({ prompt: "x".repeat(3000) }, fakeFetch(jsonReply(422, { detail: [] })));
+  const invalid = await queryApi({ prompt: "x".repeat(3000), csrfToken: "t" }, fakeFetch(jsonReply(422, { detail: [] })));
   assert.equal(invalid.error.code, "invalid_question");
   assert.equal(invalid.error.retryable, false);
 
   const htmlPage = { ok: false, status: 504, json: async () => { throw new SyntaxError("Unexpected token <"); } };
-  const timedOut = await queryApi({ prompt: "q" }, fakeFetch(htmlPage));
+  const timedOut = await queryApi({ prompt: "q", csrfToken: "t" }, fakeFetch(htmlPage));
   assert.equal(timedOut.error.code, "unavailable");
   assert.equal(timedOut.error.retryable, true);
 
-  const offline = await queryApi({ prompt: "q" }, fakeFetch(new TypeError("Failed to fetch")));
+  const offline = await queryApi({ prompt: "q", csrfToken: "t" }, fakeFetch(new TypeError("Failed to fetch")));
   assert.equal(offline.error.code, "unavailable");
 });
 
 test("cancelling a question rejects with AbortError instead of showing an error", async () => {
   const abort = new DOMException("The operation was aborted.", "AbortError");
-  await assert.rejects(queryApi({ prompt: "q" }, fakeFetch(abort)), { name: "AbortError" });
+  await assert.rejects(queryApi({ prompt: "q", csrfToken: "t" }, fakeFetch(abort)), { name: "AbortError" });
 });
 
-test("normalized responses always have every field the UI reads", () => {
-  const partial = normalizeResponse({ status: "success", message: "Hi" });
-  assert.deepEqual(partial, { status: "success", sql: "", model: "", message: "Hi", tables: [], visualizations: [], kpis: [] });
-  assert.equal(normalizeResponse(null).status, "error");
+test("only well-formed replies become answers; anything else is a retryable error", () => {
+  const full = normalizeResponse({ status: "success", message: "Hi", tables: [], visualizations: [], kpis: [] });
+  assert.deepEqual(full, { status: "success", sql: "", model: "", message: "Hi", tables: [], visualizations: [], kpis: [] });
+  for (const bad of [null, { status: "success", message: "Hi" }, { status: "done", message: "", tables: [], visualizations: [], kpis: [] }]) {
+    const response = normalizeResponse(bad);
+    assert.equal(response.status, "error");
+    assert.equal(response.error.retryable, true);
+  }
+});
+
+test("sign-in problems become sign_in_required or access_denied, and no CSRF token means no request", async () => {
+  const noToken = fakeFetch(jsonReply(200, SUCCESS));
+  const withoutToken = await queryApi({ prompt: "q" }, noToken);
+  assert.equal(withoutToken.error.code, "sign_in_required");
+  assert.equal(noToken.calls.length, 0);
+
+  const ended = await queryApi({ prompt: "q", csrfToken: "t" }, fakeFetch(jsonReply(401, { detail: "x" })));
+  assert.equal(ended.error.code, "sign_in_required");
+  const denied = await queryApi({ prompt: "q", csrfToken: "t" }, fakeFetch(jsonReply(403, { detail: "x" })));
+  assert.equal(denied.error.code, "access_denied");
+  assert.equal(denied.error.retryable, false);
+});
+
+test("the CSRF token and session cookie travel with every question", async () => {
+  const { calls, fetchImpl } = fakeFetch(jsonReply(200, SUCCESS));
+  await queryApi({ prompt: "q", csrfToken: "session-csrf" }, { fetchImpl });
+  assert.equal(calls[0].init.headers["X-CSRF-Token"], "session-csrf");
+  assert.equal(calls[0].init.credentials, "same-origin");
+  assert.equal(calls[0].init.cache, "no-store");
 });
 
 test("models come from GET /api/models, server default first, and failures give an empty list", async () => {
@@ -111,6 +136,6 @@ test("models come from GET /api/models, server default first, and failures give 
 
 test("the answering model is kept, so a fallback to Ollama is visible", async () => {
   const { fetchImpl } = fakeFetch(jsonReply(200, { ...SUCCESS, model: "qwen3:8b" }));
-  const response = await queryApi({ prompt: "q", modelId: "gemini" }, { fetchImpl });
+  const response = await queryApi({ prompt: "q", modelId: "gemini", csrfToken: "t" }, { fetchImpl });
   assert.equal(response.model, "qwen3:8b");
 });
