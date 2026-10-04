@@ -62,6 +62,18 @@ def test_prompt_has_schema_then_question() -> None:
     assert prompt.endswith("Question: How many films?")
 
 
+# ---- system instruction ----
+
+
+def test_instruction_targets_postgres_and_case_insensitive_matching() -> None:
+    """Both rules fixed wrong answers on the real database: without the
+    ILIKE rule, questions like "actors named Nick" returned no rows
+    because Pagila stores names in capitals."""
+    assert "PostgreSQL" in SYSTEM_INSTRUCTION
+    assert "MySQL" not in SYSTEM_INSTRUCTION
+    assert "ILIKE" in SYSTEM_INSTRUCTION
+
+
 # ---- extract_sql ----
 
 

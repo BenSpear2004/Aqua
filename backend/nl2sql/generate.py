@@ -22,8 +22,8 @@ import httpx
 from nl2sql.config import Settings
 from nl2sql.llm import complete
 
-# Which SQL dialect to ask for. Change when the hosted database is decided.
-DIALECT_NAME = "MySQL 8"
+# The SQL dialect the model writes. Our Tiger Cloud database runs Postgres.
+DIALECT_NAME = "PostgreSQL"
 
 SYSTEM_INSTRUCTION = f"""\
 You translate questions into SQL for a {DIALECT_NAME} database.
@@ -32,6 +32,8 @@ Rules:
 - Answer with exactly one SQL SELECT statement.
 - Use only the tables and columns in the schema you are given.
 - Use {DIALECT_NAME} syntax.
+- Text comparisons are case-sensitive. When comparing a column to any
+  word or name taken from the question, use ILIKE instead of =.
 """
 
 # Ollama constrains the reply to JSON matching this, so the answer is

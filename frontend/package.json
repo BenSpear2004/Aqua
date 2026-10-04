@@ -8,8 +8,13 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@react-three/fiber": "^9.1.2",
+    "framer-motion": "^12.6.2",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "recharts": "^2.15.1",
+    "three": "^0.175.0"
   },
   "devDependencies": {
     "vite": "^7.0.0"

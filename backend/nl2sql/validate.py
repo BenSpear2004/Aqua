@@ -14,9 +14,9 @@ semicolon, and it wrongly rejects harmless queries such as
 Parsing tells us what the statement *is*, not what words it contains.
 
 Checks the statement type, blocks dangerous functions and system
-catalogs, and can restrict queries to a list of allowed tables.
-limit_rows() then caps how many rows a validated query can return.
-Column checks are not done yet.
+catalogs, and can restrict queries to a list of allowed tables. The
+row limit is applied when the query runs (execute.py). Column checks
+are not done yet.
 """
 
 from __future__ import annotations
@@ -106,7 +106,16 @@ def _function_name(node: exp.Func) -> str:
 # column, and in places the database's users. The model gets the schema
 # in its prompt and never needs these, so they are always blocked.
 SYSTEM_SCHEMAS: frozenset[str] = frozenset(
-    {"information_schema", "pg_catalog", "pg_toast", "mysql", "performance_schema", "sys"}
+    {
+        # Postgres and MySQL catalogs.
+        "information_schema", "pg_catalog", "pg_toast",
+        "mysql", "performance_schema", "sys",
+        # TimescaleDB and its toolkit, installed on our Tiger Cloud
+        # database. Internal bookkeeping, never Pagila data.
+        "_timescaledb_cache", "_timescaledb_catalog", "_timescaledb_config",
+        "_timescaledb_functions", "_timescaledb_internal", "timescale_functions",
+        "timescaledb_experimental", "timescaledb_information", "toolkit_experimental",
+    }
 )
 
 
@@ -137,7 +146,7 @@ def _check_tables(statement: exp.Query, allowed: frozenset[str] | None) -> None:
 
 def validate_sql(
     sql: str,
-    dialect: str = "mysql",
+    dialect: str = "postgres",
     allowed_tables: Iterable[str] | None = None,
 ) -> exp.Query:
     """Return the parsed query if it is safe to run, otherwise raise.
@@ -146,8 +155,8 @@ def validate_sql(
     injection, column checks) can work on it without parsing the same
     string a second time.
 
-    `dialect` is a parameter because where Sakila will be hosted is not
-    decided yet, and MySQL and PostgreSQL parse some SQL differently.
+    `dialect` defaults to Postgres, which our Tiger Cloud database runs.
+    It stays a parameter because dialects parse some SQL differently.
 
     `allowed_tables`, if given, is the only tables the query may read.
     Left as None, any table is allowed except system catalogs.
@@ -194,36 +203,3 @@ def validate_sql(
     _check_tables(statement, allowed)
 
     return statement
-
-
-# Most rows any query may return. Enough for any table a person would
-# read in the panel; stops "list all contacts" pulling a whole table.
-DEFAULT_MAX_ROWS = 1000
-
-
-def limit_rows(query: exp.Query, max_rows: int = DEFAULT_MAX_ROWS) -> exp.Query:
-    """Return a copy of a validated query that returns at most max_rows.
-
-    A query with no limit gets one, a limit above max_rows is lowered,
-    and a smaller limit is left alone. Only the outer query is changed,
-    so ORDER BY, OFFSET and limits inside subqueries keep working.
-
-    Kept separate from validate_sql: that decides whether a query is
-    safe to run, this one bounds how much it can return.
-    """
-    current = query.args.get("limit")
-    if current is None:
-        requested = None
-    elif isinstance(current, exp.Fetch):
-        # Postgres FETCH FIRST n ROWS ONLY, another way to write LIMIT n.
-        requested = current.args.get("count")
-    else:
-        requested = current.expression  # None for LIMIT ALL
-
-    if requested is None:
-        return query.limit(max_rows)
-    if not (isinstance(requested, exp.Literal) and requested.is_int):
-        # An expression like LIMIT 1+1. Rare, and guessing its value
-        # could raise the limit the model asked for, so refuse it.
-        raise UnsafeQueryError("LIMIT must be a whole number.")
-    return query.limit(min(int(requested.this), max_rows))
