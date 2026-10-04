@@ -1,5 +1,5 @@
 import React from "react";
-import staticLogoUrl from "../../assets/models/Aqua_logo_static.svg?url";
+import staticLogoUrl from "../../assets/models/AQUA_V2_Final_static.svg?url";
 import "./model.css";
 
 export default function AquaLogoFallback({ compact = false }) {

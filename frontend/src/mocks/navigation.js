@@ -1,4 +1,5 @@
 import { createMockResponse } from "./mockResponses.js";
+import { DEFAULT_MODEL_ID } from "./aiModels.js";
 
 export const FAQS = [
   { id: "largest-expenses", title: "What are my largest expenses?", prompt: "What were my largest expense categories?" },
@@ -68,6 +69,7 @@ export function createInitialChatState() {
   return {
     conversations,
     activeConversationId: "conversation-start",
+    selectedModelId: DEFAULT_MODEL_ID,
     expandedFolderIds: ["company-analysis", "statements", "forecasting"]
   };
 }

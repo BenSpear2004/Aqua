@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
+import React, { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import ModelErrorBoundary from "../aqua/ModelErrorBoundary.jsx";
 import ThinkingBubbles from "./ThinkingBubbles.jsx";
 import "../aqua/model.css";
@@ -18,6 +18,7 @@ export default function ChatInput({
   const [layout, setLayout] = useState(null);
   const [pressure, setPressure] = useState(false);
   const [localDraft, setLocalDraft] = useState("");
+  const [desktop, setDesktop] = useState(() => window.matchMedia("(min-width: 901px)").matches);
   const promptId = useId();
   const controlled = Boolean(onDraftChange);
   const value = controlled ? draft : localDraft;
@@ -27,6 +28,36 @@ export default function ChatInput({
   const onReady = useCallback(() => setReady(true), []);
   const onFailure = useCallback(() => setFailed(true), []);
   const onLayout = useCallback((next) => setLayout(next), []);
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 901px)");
+    const update = () => setDesktop(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useLayoutEffect(() => {
+    const input = textareaRef.current;
+    if (!input) return;
+    if (!desktop) {
+      input.style.paddingBlock = "";
+      return;
+    }
+    // Measure real wrapped lines so a short draft and a two-line draft both sit
+    // in the middle, while longer drafts keep the existing scrolling behavior.
+    const height = input.clientHeight;
+    const previousHeight = input.style.height;
+    const previousMinimum = input.style.minHeight;
+    const previousScroll = input.scrollTop;
+    input.style.minHeight = "0px";
+    input.style.height = "0px";
+    input.style.paddingBlock = "0px";
+    const contentHeight = input.scrollHeight;
+    input.style.height = previousHeight;
+    input.style.minHeight = previousMinimum;
+    input.style.paddingBlock = `${Math.max(0, (height - Math.min(contentHeight, height)) / 2)}px`;
+    input.scrollTop = previousScroll;
+  }, [desktop, value, geometry, textareaRef]);
 
   useEffect(() => {
     if (focusRequest) textareaRef.current?.focus({ preventScroll: true });
@@ -65,7 +96,7 @@ export default function ChatInput({
         {!failed && (
           <ModelErrorBoundary onFailure={onFailure}>
             <Suspense fallback={null}>
-              <Chatbar3D focused={focused} onLayout={onLayout} onReady={onReady} onFailure={onFailure} />
+              <Chatbar3D desktop={desktop} focused={focused} onLayout={onLayout} onReady={onReady} onFailure={onFailure} />
             </Suspense>
           </ModelErrorBoundary>
         )}

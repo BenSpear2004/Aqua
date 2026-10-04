@@ -49,10 +49,10 @@ function createTransmissionReceiver() {
   });
 }
 
-function ChatbarModel({ onLayout, onReady }) {
+function ChatbarModel({ desktop, onLayout, onReady }) {
   const gltf = useLoader(GLTFLoader, chatbarUrl);
   const { camera, size, invalidate } = useThree();
-  const { model, body, button, ownedMaterials } = useMemo(() => {
+  const { model, body, button, buttonDepth, buttonBasePosition, ownedMaterials } = useMemo(() => {
     const selected = gltf.scenes.find((scene) => scene.name === "AQUA_CHAT_BAR_V6_CLEAR_GLASS");
     if (!selected) throw new Error("The supplied clear-glass chat bar scene is unavailable.");
     const copy = selected.clone(true);
@@ -101,20 +101,24 @@ function ChatbarModel({ onLayout, onReady }) {
     buttonDepth.position.copy(send.position);
     buttonDepth.position.y -= 0.06;
     copy.add(buttonDepth);
-    return { model: copy, body: shell, button: send, ownedMaterials: [...materials.values(), depthMaterial] };
+    return { model: copy, body: shell, button: send, buttonDepth, buttonBasePosition: send.position.clone(), ownedMaterials: [...materials.values(), depthMaterial] };
   }, [gltf]);
 
   useLayoutEffect(() => {
     const aspect = size.width / Math.max(size.height, 1);
-    // Constant horizontal field keeps original geometry proportions at every breakpoint.
+    // Keep the same width; a taller vertical field gives desktop a shorter shell.
+    const verticalScale = desktop ? 0.88 : 1;
     camera.left = -6.4;
     camera.right = 6.4;
-    camera.top = 6.4 / aspect;
-    camera.bottom = -6.4 / aspect;
+    camera.top = 6.4 / aspect / verticalScale;
+    camera.bottom = -6.4 / aspect / verticalScale;
     camera.position.set(0, 22, 7);
     camera.lookAt(0, 0.1, 0);
     camera.updateProjectionMatrix();
     camera.updateMatrixWorld(true);
+    button.position.copy(buttonBasePosition);
+    buttonDepth.position.copy(buttonBasePosition);
+    buttonDepth.position.y -= 0.06;
     model.updateMatrixWorld(true);
 
     const project = (point) => {
@@ -125,12 +129,15 @@ function ChatbarModel({ onLayout, onReady }) {
     const usefulMin = bounds.min.x + 0.5;
     const usefulMax = bounds.max.x - 0.5;
     let upperSurface = size.height;
+    let lowerSurface = 0;
     const position = body.geometry.attributes.position;
     const vertex = new Vector3();
     for (let index = 0; index < position.count; index += 1) {
       vertex.fromBufferAttribute(position, index).applyMatrix4(body.matrixWorld);
       if (vertex.x >= usefulMin && vertex.x <= usefulMax) {
-        upperSurface = Math.min(upperSurface, project(vertex).y);
+        const projectedY = project(vertex).y;
+        upperSurface = Math.min(upperSurface, projectedY);
+        lowerSurface = Math.max(lowerSurface, projectedY);
       }
     }
     const left = project(new Vector3(usefulMin, 0, 0)).x;
@@ -139,17 +146,29 @@ function ChatbarModel({ onLayout, onReady }) {
     const promptLeft = project(new Vector3(-4.98, textPlane, 0));
     const promptRight = project(new Vector3(4.13, textPlane, 0));
     const promptHeight = Math.max(44, Math.min(68, size.width * 0.062));
+    const shellCenter = (upperSurface + lowerSurface) / 2;
+    if (desktop) {
+      // Center the supplied glass button in the shell, moving only this clone.
+      const worldCenter = button.getWorldPosition(new Vector3());
+      const before = project(worldCenter).y;
+      const step = project(worldCenter.clone().add(new Vector3(0, 0, 1))).y - before;
+      worldCenter.z += (shellCenter - before) / step;
+      button.position.copy(button.parent.worldToLocal(worldCenter));
+      buttonDepth.position.z += button.position.z - buttonBasePosition.z;
+      model.updateMatrixWorld(true);
+    }
     const buttonCenter = project(button.getWorldPosition(new Vector3()));
     const buttonBounds = new Box3().setFromObject(button);
     const buttonWidth = (buttonBounds.max.x - buttonBounds.min.x) * size.width / 12.8;
     const targetSize = Math.max(44, Math.min(72, buttonWidth));
+    const targetHeight = desktop ? Math.max(44, targetSize * verticalScale) : targetSize;
     onLayout({
       surface: { left, top: upperSurface, width: right - left, height: 1 },
-      prompt: { left: promptLeft.x, top: promptLeft.y - promptHeight / 2, width: promptRight.x - promptLeft.x, height: promptHeight },
-      button: { left: buttonCenter.x - targetSize / 2, top: buttonCenter.y - targetSize / 2, width: targetSize, height: targetSize },
+      prompt: { left: promptLeft.x, top: (desktop ? shellCenter : promptLeft.y) - promptHeight / 2, width: promptRight.x - promptLeft.x, height: promptHeight },
+      button: { left: buttonCenter.x - targetSize / 2, top: buttonCenter.y - targetHeight / 2, width: targetSize, height: targetHeight },
     });
     invalidate();
-  }, [body, button, camera, model, onLayout, size.width, size.height, invalidate]);
+  }, [body, button, buttonDepth, buttonBasePosition, desktop, camera, model, onLayout, size.width, size.height, invalidate]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(onReady);
@@ -160,7 +179,7 @@ function ChatbarModel({ onLayout, onReady }) {
   return <primitive object={model} dispose={null} />;
 }
 
-export default function Chatbar3D({ focused, onLayout, onReady, onFailure }) {
+export default function Chatbar3D({ desktop = false, focused, onLayout, onReady, onFailure }) {
   return (
     <div className="chat-bar-model" aria-hidden="true">
       <ModelErrorBoundary onFailure={onFailure}>
@@ -182,7 +201,7 @@ export default function Chatbar3D({ focused, onLayout, onReady, onFailure }) {
           <directionalLight position={[-4, 8, 5]} intensity={focused ? 1.05 : 0.8} color="#d8f8fc" />
           <directionalLight position={[5, 4, -3]} intensity={0.55} color="#6bd8ed" />
           <Suspense fallback={null}>
-            <ChatbarModel onLayout={onLayout} onReady={onReady} />
+            <ChatbarModel desktop={desktop} onLayout={onLayout} onReady={onReady} />
           </Suspense>
         </Canvas>
       </ModelErrorBoundary>

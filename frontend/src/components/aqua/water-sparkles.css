@@ -1,0 +1,85 @@
+.water-sparkles {
+  position: absolute;
+  z-index: var(--layer-background, 0);
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.water-sparkle {
+  position: absolute;
+  width: var(--sparkle-size);
+  height: var(--sparkle-size);
+  animation: water-sparkle-drift var(--sparkle-drift) ease-in-out var(--sparkle-delay) infinite alternate;
+}
+
+.water-sparkle__light {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 28%, #efffff 0 12%, rgba(158, 245, 252, 0.8) 28%, rgba(58, 188, 214, 0.16) 66%, transparent 80%);
+  box-shadow: 0 0 7px rgba(113, 229, 246, 0.35);
+  opacity: 0.3;
+  animation: water-sparkle-shimmer var(--sparkle-shimmer) ease-in-out var(--sparkle-delay) infinite;
+}
+
+.water-sparkle--glint .water-sparkle__light::before,
+.water-sparkle--glint .water-sparkle__light::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  content: "";
+  border-radius: 50%;
+  transform: translate(-50%, -50%) rotate(-18deg);
+}
+
+.water-sparkle--glint .water-sparkle__light::before {
+  width: 13px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(185, 252, 255, 0.85), transparent);
+}
+
+.water-sparkle--glint .water-sparkle__light::after {
+  width: 1px;
+  height: 8px;
+  background: linear-gradient(transparent, rgba(132, 229, 246, 0.6), transparent);
+}
+
+@keyframes water-sparkle-drift {
+  from { transform: translate3d(0, 14px, 0); }
+  to { transform: translate3d(var(--sparkle-sway), -20px, 0); }
+}
+
+@keyframes water-sparkle-shimmer {
+  0%, 100% { opacity: 0.1; transform: scale(0.75); }
+  42% { opacity: 0.65; transform: scale(1); }
+  64% { opacity: 0.24; transform: scale(0.85); }
+}
+
+.water-sparkles[data-paused="true"] *,
+.water-sparkles[data-paused="true"] *::before,
+.water-sparkles[data-paused="true"] *::after {
+  animation-play-state: paused;
+}
+
+@media (max-width: 900px) {
+  .water-sparkle:nth-child(n + 27) { display: none; }
+}
+
+.water-sparkles--still .water-sparkle,
+.water-sparkles--still .water-sparkle__light {
+  animation: none;
+}
+
+.water-sparkles--still .water-sparkle__light { opacity: 0.2; }
+
+@media (prefers-reduced-motion: reduce) {
+  .water-sparkle, .water-sparkle__light { animation: none; }
+  .water-sparkle__light { opacity: 0.2; }
+}
+
+@media (forced-colors: active) {
+  .water-sparkles { display: none; }
+}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FAQS, PROJECTS, createInitialChatState } from "../mocks/navigation.js";
+import { AI_MODELS } from "../mocks/aiModels.js";
 import { retryMessage as retryRequest, sendMessage } from "../services/aquaClient.js";
 
 let nextId = 0;
@@ -32,20 +33,20 @@ export function useChat() {
     };
   }, []);
 
-  const runRequest = useCallback(({ conversationId, requestId, prompt, replyId, userMessageId, retrying }) => {
+  const runRequest = useCallback(({ conversationId, requestId, modelId, prompt, replyId, userMessageId, retrying }) => {
     const controller = new AbortController();
-    requests.current.set(conversationId, { requestId, controller });
+    requests.current.set(conversationId, { requestId, modelId, controller });
 
     const applyResponse = (response, phase) => update((current) => ({
       ...current,
       conversations: current.conversations.map((conversation) => {
         if (conversation.id !== conversationId || conversation.request?.id !== requestId) return conversation;
-        const reply = { id: replyId, role: "aqua", response, replyTo: userMessageId, requestId, conversationId };
+        const reply = { id: replyId, role: "aqua", response, replyTo: userMessageId, requestId, conversationId, modelId };
         const exists = conversation.messages.some((message) => message.id === replyId);
         return {
           ...conversation,
           updatedAt: Date.now(),
-          request: phase === "complete" ? null : { id: requestId, phase },
+          request: phase === "complete" ? null : { id: requestId, modelId, phase },
           messages: exists
             ? conversation.messages.map((message) => message.id === replyId ? reply : message)
             : [...conversation.messages, reply]
@@ -59,6 +60,7 @@ export function useChat() {
           prompt,
           conversationId,
           requestId,
+          modelId,
           signal: controller.signal,
           onFirstContent: (fragment) => applyResponse(fragment, "streaming"),
           onContent: (fragment) => applyResponse(fragment, "streaming")
@@ -80,6 +82,7 @@ export function useChat() {
     const requestId = createId("request");
     const userMessageId = createId("message");
     const replyId = createId("message");
+    const modelId = current.selectedModelId;
     update((snapshot) => ({
       ...snapshot,
       conversations: snapshot.conversations.map((item) => item.id === conversation.id ? {
@@ -87,11 +90,11 @@ export function useChat() {
         draft: "",
         title: item.messages.length ? item.title : prompt.replace(/\s+/g, " ").slice(0, 44),
         updatedAt: Date.now(),
-        request: { id: requestId, phase: "waiting" },
-        messages: [...item.messages, { id: userMessageId, role: "user", content: prompt, requestId, conversationId: item.id }]
+        request: { id: requestId, modelId, phase: "waiting" },
+        messages: [...item.messages, { id: userMessageId, role: "user", content: prompt, requestId, conversationId: item.id, modelId }]
       } : item)
     }));
-    runRequest({ conversationId: conversation.id, requestId, prompt, replyId, userMessageId, retrying: false });
+    runRequest({ conversationId: conversation.id, requestId, modelId, prompt, replyId, userMessageId, retrying: false });
     return userMessageId;
   }, [runRequest, update]);
 
@@ -103,17 +106,18 @@ export function useChat() {
     const prompt = conversation.messages.find((message) => message.id === reply?.replyTo)?.content;
     if (!prompt || reply?.response?.status !== "error" || !reply.response.error?.retryable) return;
     const requestId = createId("request");
+    const modelId = reply.modelId ?? current.selectedModelId;
     update((snapshot) => ({
       ...snapshot,
       conversations: snapshot.conversations.map((item) => item.id === conversation.id ? {
         ...item,
-        request: { id: requestId, phase: "waiting" },
+        request: { id: requestId, modelId, phase: "waiting" },
         messages: item.messages.map((message) => message.id === messageId
           ? { ...message, requestId, response: { status: "loading" } }
           : message)
       } : item)
     }));
-    runRequest({ conversationId: conversation.id, requestId, prompt, replyId: messageId, userMessageId: reply.replyTo, retrying: true });
+    runRequest({ conversationId: conversation.id, requestId, modelId, prompt, replyId: messageId, userMessageId: reply.replyTo, retrying: true });
   }, [runRequest, update]);
 
   const startConversation = useCallback(() => {
@@ -141,6 +145,11 @@ export function useChat() {
     }));
   }, [update]);
 
+  const setModelId = useCallback((modelId) => {
+    if (!AI_MODELS.some((model) => model.id === modelId)) return;
+    update((current) => current.selectedModelId === modelId ? current : { ...current, selectedModelId: modelId });
+  }, [update]);
+
   const toggleFolder = useCallback((id) => {
     update((current) => ({
       ...current,
@@ -159,6 +168,9 @@ export function useChat() {
     retry,
     conversations: state.conversations,
     activeConversationId: state.activeConversationId,
+    models: AI_MODELS,
+    selectedModelId: state.selectedModelId,
+    setModelId,
     projects: PROJECTS,
     faqs: FAQS,
     expandedFolderIds: state.expandedFolderIds,
