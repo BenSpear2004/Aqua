@@ -5,4 +5,4 @@ __pycache__/
 node_modules/
 dist/
 AQUA_WEBSITE_BUILD_SPEC.md
-AQUA_CODEX_FRONTEND_CONTRACT.md
+AQUA_CODEX_FRONTEND_CONTRACT.mdeval/results/
