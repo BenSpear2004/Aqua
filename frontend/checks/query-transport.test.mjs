@@ -26,7 +26,7 @@ for (const [name, request] of [["send", sendMessage], ["retry", retryMessage]]) 
     const controller = new AbortController();
     const response = await request({
       prompt: "How many films?", csrfToken: "session-csrf", signal: controller.signal, demoMode: false,
-      conversationId: "conversation-a", requestId: "request-a", modelId: "qwen3:8b"
+      conversationId: "conversation-a", requestId: "request-a", modelId: "gemini"
     });
     assert.equal(requests.length, 1);
     const { url, init } = requests[0];
@@ -37,7 +37,7 @@ for (const [name, request] of [["send", sendMessage], ["retry", retryMessage]]) 
     assert.equal(init.signal, controller.signal);
     assert.equal(new Headers(init.headers).get("Content-Type"), "application/json");
     assert.equal(new Headers(init.headers).get("X-CSRF-Token"), "session-csrf");
-    assert.deepEqual(JSON.parse(init.body), { question: "How many films?" });
+    assert.deepEqual(JSON.parse(init.body), { question: "How many films?", model: "gemini" });
     assert.equal(response.status, "success");
     assert.equal(response.sql, RESULT.sql);
     assert.equal(response.message, RESULT.message);
@@ -88,15 +88,18 @@ test("live cancellation is propagated rather than rendered as a failed query", a
   await assert.rejects(sendMessage({ prompt: "q", csrfToken: "csrf", demoMode: false, signal: new AbortController().signal }), (error) => error === cancelled);
 });
 
-test("a rejected SQL result stays an error without losing its SQL", async (t) => {
-  const rejected = { ...RESULT, status: "error", sql: "DELETE FROM film", message: "private rejection detail", tables: [], error: { code: "rejected", message: "private database diagnostic", retryable: false } };
+test("a rejected SQL result stays an error, keeps its SQL and says why", async (t) => {
+  // The API contract (CLAUDE.md) shows the blocked SQL and the validator's
+  // reason; only the backend's own error message is shown, never other fields.
+  const rejected = { ...RESULT, status: "error", sql: "DELETE FROM film", message: "private rejection detail", tables: [], error: { code: "rejected", message: "Only SELECT queries are allowed, got DELETE.", retryable: false } };
   t.mock.method(globalThis, "fetch", async () => jsonResponse(rejected));
   const response = await sendMessage({ prompt: "Delete films", csrfToken: "csrf", demoMode: false });
   assert.equal(response.status, "error");
   assert.equal(response.sql, rejected.sql);
-  assert.equal(response.error.code, "query_failed");
+  assert.equal(response.error.code, "rejected");
   assert.equal(response.error.retryable, false);
-  assert.doesNotMatch(JSON.stringify(response), /private rejection detail|private database diagnostic/);
+  assert.match(response.error.message, /got DELETE/);
+  assert.doesNotMatch(JSON.stringify(response), /private rejection detail/);
 });
 
 test("a malformed successful response cannot be rendered as valid customer data", async (t) => {

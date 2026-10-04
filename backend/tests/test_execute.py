@@ -1,7 +1,7 @@
 """Tests for nl2sql/execute.py.
 
-The row-limit and unit tests need no database. The tests marked
-`needs_db` run against the real database as nl2sql_reader and are
+The row-limit and unit tests need no database. The test_real_* tests
+run against the real database (bank or Pagila) as nl2sql_reader and are
 skipped when DATABASE_URL is not set.
 """
 
@@ -171,44 +171,43 @@ def test_raw_strings_are_refused() -> None:
 # ---- execute against the real database ----
 
 REAL = load_settings()
-needs_db = pytest.mark.skipif(
-    not REAL.database_url,
-    reason="DATABASE_URL is not set; these tests need the real database",
-)
+
+# A table and its key on each database, for the tests below.
+TABLE = {"bank": ("trans", "trans_id"), "pagila": ("film", "film_id")}
 
 
-@needs_db
-def test_real_query_returns_rows() -> None:
-    result = execute(validate_sql("SELECT count(*) AS films FROM film"), REAL)
-    assert result.columns == ["films"]
+def test_real_query_returns_rows(live_database: str) -> None:
+    table, _ = TABLE[live_database]
+    result = execute(validate_sql(f"SELECT count(*) AS n FROM {table}"), REAL)
+    assert result.columns == ["n"]
     assert result.rows[0][0] > 0
     assert result.truncated is False
 
 
-@needs_db
-def test_real_truncation() -> None:
-    result = execute(validate_sql("SELECT film_id FROM film ORDER BY film_id"), REAL, max_rows=10)
+def test_real_truncation(live_database: str) -> None:
+    table, key = TABLE[live_database]
+    result = execute(validate_sql(f"SELECT {key} FROM {table} ORDER BY {key}"), REAL, max_rows=10)
     assert len(result.rows) == 10
     assert result.truncated is True
 
 
-@needs_db
-def test_real_smaller_limit_is_kept() -> None:
-    result = execute(validate_sql("SELECT film_id FROM film LIMIT 5"), REAL, max_rows=10)
+def test_real_smaller_limit_is_kept(live_database: str) -> None:
+    table, key = TABLE[live_database]
+    result = execute(validate_sql(f"SELECT {key} FROM {table} LIMIT 5"), REAL, max_rows=10)
     assert len(result.rows) == 5
     assert result.truncated is False
 
 
-@needs_db
-def test_real_unknown_column_is_a_query_error() -> None:
+def test_real_unknown_column_is_a_query_error(live_database: str) -> None:
+    table, _ = TABLE[live_database]
     with pytest.raises(QueryError, match="does not exist"):
-        execute(validate_sql("SELECT no_such_column FROM film"), REAL)
+        execute(validate_sql(f"SELECT no_such_column FROM {table}"), REAL)
 
 
-@needs_db
-def test_real_statement_timeout_is_a_query_error() -> None:
+def test_real_statement_timeout_is_a_query_error(live_database: str) -> None:
     """A query that runs past the role's 10 second limit is cancelled.
     Takes about 10 seconds."""
-    slow = "SELECT count(*) FROM film a CROSS JOIN film b CROSS JOIN film c CROSS JOIN film d"
+    table, _ = TABLE[live_database]
+    joined = " CROSS JOIN ".join(f"{table} {alias}" for alias in "abcd")
     with pytest.raises(QueryError, match="statement timeout"):
-        execute(validate_sql(slow), REAL)
+        execute(validate_sql(f"SELECT count(*) FROM {joined}"), REAL)

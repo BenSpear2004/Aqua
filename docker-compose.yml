@@ -18,6 +18,8 @@ services:
       retries: 5
       start_period: 10s
 
+  # Production: nginx serves the built site on 5173 and forwards /api to
+  # the backend. For local frontend work run `npm run dev` in frontend/.
   frontend:
     build: ./frontend
     network_mode: host
@@ -26,12 +28,8 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - "fetch('http://127.0.0.1:5173').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:5173/"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 5s

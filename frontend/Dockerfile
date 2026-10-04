@@ -1,11 +1,13 @@
-FROM node:24-alpine
-
+# Build the site once, then serve the static files with nginx. The dev
+# server (npm run dev) is for local work only.
+FROM node:24-alpine AS build
 WORKDIR /app
-COPY package.json .
-RUN npm install
-
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
-RUN chown -R node:node /app
-USER node
+RUN npm run build
 
-CMD ["npm", "run", "dev"]
+FROM nginx:1.27-alpine
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 5173

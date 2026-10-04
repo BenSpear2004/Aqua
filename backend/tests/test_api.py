@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import main
 from auth.security import UserSession, require_database_access
+from nl2sql.config import Settings
 from nl2sql.db import DatabaseError
 from nl2sql.llm import LLMError
 from nl2sql.pipeline import Answer
@@ -131,7 +132,6 @@ def test_question_whitespace_is_trimmed(monkeypatch: pytest.MonkeyPatch) -> None
 def test_schema_outage_is_a_503(monkeypatch: pytest.MonkeyPatch) -> None:
     """The schema is read on the first question; a database outage there
     is reported like any other, without the connection details."""
-
     def broken_schema(settings):
         raise DatabaseError("Could not read the schema: host db.internal")
 
@@ -151,3 +151,67 @@ def test_health_is_cheap_and_reports_configuration() -> None:
 
 def test_starter_chat_routes_are_gone() -> None:
     assert client.post("/api/chat", json={"prompt": "hi"}).status_code == 404
+
+
+# ---- model choice ----
+
+
+def capture_settings(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Replace the pipeline; returns the Settings each question ran with."""
+    seen = []
+
+    def fake_answer_question(question, settings, schema, retriever=None):
+        seen.append(settings)
+        return Answer(question=question, sql="SELECT 1", columns=["n"], rows=[(1,)])
+
+    monkeypatch.setattr(main, "answer_question", fake_answer_question)
+    monkeypatch.setattr(main, "get_schema", lambda settings: SCHEMA)
+    return seen
+
+
+def test_chosen_model_is_used_for_that_question(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main, "SETTINGS", Settings(gemini_api_key="k"))
+    seen = capture_settings(monkeypatch)
+
+    client.post("/api/query", json={"question": "q", "model": "gemini"})
+    client.post("/api/query", json={"question": "q"})
+
+    assert [s.llm_provider for s in seen] == ["gemini", "ollama"]
+    assert main.SETTINGS.llm_provider == "ollama"  # one request never changes another
+
+
+def test_gemini_without_a_key_is_400_and_not_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main, "SETTINGS", Settings())
+    seen = capture_settings(monkeypatch)
+    response = client.post("/api/query", json={"question": "q", "model": "gemini"})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "code": "model_not_configured",
+        "message": "Gemini is not set up on this server.",
+        "retryable": False,
+    }
+    assert seen == []
+
+
+def test_unknown_model_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = capture_settings(monkeypatch)
+    response = client.post("/api/query", json={"question": "q", "model": "gpt-5"})
+    assert response.status_code == 422
+    assert seen == []
+
+
+def test_models_lists_gemini_only_with_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main, "SETTINGS", Settings())
+    assert [m["id"] for m in client.get("/api/models").json()["models"]] == ["ollama"]
+
+    monkeypatch.setattr(main, "SETTINGS", Settings(gemini_api_key="k", gemini_model="gemini-x"))
+    models = client.get("/api/models").json()["models"]
+    assert [m["id"] for m in models] == ["ollama", "gemini"]
+    assert models[1]["name"] == "gemini-x"
+    assert set(models[0]) == {"id", "name", "description"}
+
+
+def test_models_puts_the_server_default_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main, "SETTINGS", Settings(gemini_api_key="k", llm_provider="gemini"))
+    assert [m["id"] for m in client.get("/api/models").json()["models"]] == ["gemini", "ollama"]

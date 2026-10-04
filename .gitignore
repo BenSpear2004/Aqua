@@ -6,3 +6,5 @@ node_modules/
 dist/
 AQUA_WEBSITE_BUILD_SPEC.md
 AQUA_CODEX_FRONTEND_CONTRACT.md
+eval/results/
+db/financial/data/

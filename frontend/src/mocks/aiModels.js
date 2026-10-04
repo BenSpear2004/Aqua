@@ -1,8 +1,9 @@
-// Temporary choices for the selector. Replace this catalog with the available
-// models when model discovery is connected to the API client.
+// Model choices shown before /api/models answers, and in mock mode. Ids match
+// the backend's provider ids, so a question sent before the list loads still
+// names a model the server understands. The real list replaces this on load.
 export const AI_MODELS = [
-  { id: "qwen3:8b", name: "Qwen3 8B", description: "Standard model" },
-  { id: "qwen3:4b", name: "Qwen3 4B", description: "Compact model" },
+  { id: "gemini", name: "gemma-4-31b-it", description: "Google Gemini API" },
+  { id: "ollama", name: "qwen3:8b", description: "Open model on the team server" },
 ];
 
 export const DEFAULT_MODEL_ID = AI_MODELS[0].id;

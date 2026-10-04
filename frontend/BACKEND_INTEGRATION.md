@@ -21,9 +21,9 @@ The lightweight History API gate replaces the path with `/signin` or `/` after s
 
 `App.jsx` keys the private workspace by the authenticated Google `sub`. Logout, account change, session expiry, and access rechecks unmount that workspace, abort pending requests, and discard drafts, messages, and private results. A failed server logout shows an error and offers another attempt; private chat state has already been cleared. Query 401/403 responses refresh auth/access without automatically resending the question. Backend setup and the Cloudflare `/api` routing requirements are in `../docs/google-signin.md`.
 
-## Replacement point
+## Client boundary
 
-`src/services/aquaClient.js` owns the live query transport and explicit demo transport. The UI calls:
+`src/services/aquaClient.js` is the only module components call. It hands requests to `apiClient.js` (the real transport) or `mockClient.js` (the mock). The UI calls:
 
 ```js
 sendMessage({ prompt, csrfToken, demoMode, conversationId, requestId, modelId, signal, onFirstContent, onContent })
@@ -33,12 +33,17 @@ retryMessage({ prompt, csrfToken, demoMode, conversationId, requestId, modelId, 
 Both return a promise resolving to the normalized response object below. Live requests require a session `csrfToken` and map `prompt` to backend `question`. Demo requests preserve optional cumulative-text callbacks `(fragment, { conversationId, requestId, modelId })`; `modelId` is omitted when not supplied. Live requests return the complete result without simulated streaming. Presentation components do not make API requests.
 
 The Vite `/api` proxy is unchanged for development. Production must route the website's `/api/*` to the Python backend on the same public origin; cross-origin auth and an alternate API-base URL are not configured. `VITE_AQUA_DEMO_MODE` is the only new public frontend setting, and defaults to live mode when unset. It must be `true` explicitly to run the offline visual demo.
+The real backend does not stream: the callbacks are not called, and the promise resolves with the complete answer, which can take 20 to 80 seconds. A retry sends the same question again.
 
 ## Request
 
+The UI's `prompt` becomes the backend's `question`, and the selected model id becomes `model`:
+
 ```json
-{ "question": "What was our largest expense category?" }
+{ "question": "What are the top 3 film categories by total payment revenue?", "model": "gemini" }
 ```
+
+Every response also carries `sql`, the query that produced the answer (or that was refused). The UI shows it under the answer.
 
 ## Success response
 
@@ -90,6 +95,8 @@ Visualization types are allowlisted: `bar`, `line`, `area`, and `kpi`. Chart des
 
 ## Errors and no data
 
+`apiClient.js` turns transport problems into the same error shape: HTTP 429 (more than 10 questions a minute) becomes a retryable `rate_limited` error, 422 becomes a non-retryable `invalid_question` error, and a network failure or a non-JSON proxy page becomes a retryable `unavailable` error. Refused SQL (`rejected`, `query_failed`) keeps the backend's reason after a plain-language sentence, and keeps `sql` so the UI can show what was not run.
+
 Return normalized, user-safe errors:
 
 ```json
@@ -121,9 +128,7 @@ In demo mode, `src/mocks/navigation.js` supplies stable project/folder IDs, nest
 
 ## AI model selection
 
-The demo sidebar retains the keyboard-accessible model menu and fictional selection behavior. `src/mocks/aiModels.js` supplies `Qwen3 8B` / `Qwen3 4B`; selection remains in memory, and request metadata preserves it across navigation/retries. Mock replies do not run either model. Live mode displays **AQUA** without a model menu because the Python backend chooses its model from server configuration.
-
-Selectable model routing would require a separate backend contract; do not send the demo `modelId` to `/api/query` or imply it selects the production model.
+The sidebar header uses a keyboard-accessible menu for model selection. On load, `useChat.js` asks `GET /api/models` for the models the server can run (server default first) and selects the default unless the current choice is on the list. Until that answers, or if it fails, `src/mocks/aiModels.js` supplies the same ids (`gemini`, `ollama`). The selected id is kept in session memory so desktop and mobile navigation share it, recorded on each request and message, and sent as `model`. Mock replies remain scenario-based and do not run either model.
 
 ## Financial values and exports
 
@@ -147,10 +152,14 @@ Above 900px, the composer keeps its 640px width and uses slightly taller vertica
 
 For the live-mode sign-in flow, start the frontend with demo mode unset, then run `node frontend/checks/auth-page-review.mjs`. This uses installed Chrome with a temporary isolated profile and mocked API/Google responses. It checks responsive layouts, challenges, CSRF transport, session restoration, access denial, logout and query cancellation, expiry, outage recovery, and public policy routes. It writes results and screenshots to a new temporary `aqua-auth-page-review-*` directory. Set `AQUA_REVIEW_URL` or `AQUA_CHROME_EXECUTABLE` if the local preview URL or browser location differs. This review does not establish a real Google login or deployed Cloudflare configuration.
 
-Run `npm --prefix frontend run build` and `node --test frontend/checks/*.test.mjs`. The transport checks mock fetch and never contact Google or a real database. Start a preview with `VITE_AQUA_DEMO_MODE=true` for the original visual check script: `node frontend/checks/browser-review.mjs` uses installed Windows Chrome and Node's native DevTools connection on `http://127.0.0.1:5173`; it adds no dependency. It reviews 1440×900, 1024×768, and 390×844, writes screenshots and sampled birth/pop timelines to the temporary `aqua-frontend-review` directory, and exercises demo navigation, structured results, exports, keyboard behavior, motion preferences, interruptions, and context-loss fallbacks. Optional `--missing-models` and `--no-webgl` modes deliberately inject asset/graphics failures; expected handled diagnostics in those modes do not imply normal-session runtime errors.
+Three.js and the roughly 6.3 MB of active GLBs remain the principal download/rendering costs. The static fallback logo is approximately 2.1 MB uncompressed (336 KB gzip). Software-only WebGL can stutter; browser screenshots and functional checks do not establish frame-rate guarantees or final human visual approval.
 
-Three.js and the roughly 6.3 MB of active GLBs remain the principal download/rendering costs. The static fallback logo is approximately 2.1 MB uncompressed (336 KB gzip). Software-only WebGL can stutter; browser screenshots and functional checks do not establish frame-rate guarantees or final human visual approval. This frontend change preserves Docker and Vite configuration; actual auth environment values, Google registration, and Cloudflare routing must be configured separately.
+`npm test` runs every `checks/*.test.mjs` suite, including the real client's tests against a stand-in `fetch`. `browser-review.mjs` exercises scripted mock scenarios, so run the preview with `VITE_AQUA_DEMO_MODE=true` for it.
+
+## Production
+
+The frontend image builds the site (`npm ci`, `vite build`) and serves `dist/` with nginx on port 5173 (`nginx.conf`). nginx forwards `/api` to the backend on 127.0.0.1:8000, waits up to 300 seconds for an answer, limits each visitor to 10 questions a minute, and caches hashed assets for a year while never caching `index.html`. `npm run dev` is for local work only.
 
 ## Frontend touch points
 
-Auth transport lives in `authClient.js`, GIS loading in `googleIdentity.js`, and session lifecycle in `useGoogleAuth.js`. Query transport and normalization stay in `aquaClient.js`, with `useChat.js` preserving request IDs and cancellation. The chat, logo, table, and chart components remain presentation boundaries. Auth UI uses `components/auth/` and `styles/auth.css`; no package dependencies or Vite/deployment configuration changed.
+Auth transport lives in `authClient.js`, Google Identity Services loading in `googleIdentity.js`, and session lifecycle in `useGoogleAuth.js`. Query transport lives in `apiClient.js` (it adds the session's `X-CSRF-Token` and maps 401 and 403 to `sign_in_required` and `access_denied`, which `useChat.js` answers by refreshing the session). API changes belong in `src/services/apiClient.js` and, if the contract changes, this document and `CLAUDE.md`. The chat, logo, message presentation, table, chart, and styling components should not need API-specific redesign or direct fetch calls.

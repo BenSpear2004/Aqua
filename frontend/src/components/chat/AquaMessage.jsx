@@ -4,6 +4,34 @@ import FinancialTable from "../data/FinancialTable.jsx";
 
 const DashboardPreview = lazy(() => import("../data/DashboardPreview.jsx"));
 
+// Every answer shows the exact SQL behind it; a refused query shows the SQL
+// that was blocked, so the user can see why.
+function SqlBlock({ sql, label = "SQL" }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef(null);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  if (!sql) return null;
+
+  const copySql = async () => {
+    try {
+      await navigator.clipboard.writeText(sql);
+      setCopied(true);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <details className="sql-block">
+      <summary>{label}</summary>
+      <pre><code>{sql}</code></pre>
+      <button type="button" className="text-action" onClick={copySql}>{copied ? "Copied" : "Copy SQL"}</button>
+    </details>
+  );
+}
+
 export default function AquaMessage({ message, hidden = false, onRetry }) {
   const [copyStatus, setCopyStatus] = useState("");
   const copyTimer = useRef(null);
@@ -38,7 +66,7 @@ export default function AquaMessage({ message, hidden = false, onRetry }) {
         <div className="message__bubble message__bubble--aqua error-card">
           <span className="status-mark" aria-hidden="true">AQUA</span>
           <p>{response.error?.message || "AQUA couldn't complete that request. Please try again."}</p>
-          {response.sql && <details className="query-sql"><summary>View SQL</summary><pre><code>{response.sql}</code></pre></details>}
+          <SqlBlock sql={response.sql} label="SQL that was not run" />
           {response.error?.retryable && (
             <button type="button" className="text-action" onClick={() => onRetry(message.id)}>
               Try again
@@ -56,7 +84,7 @@ export default function AquaMessage({ message, hidden = false, onRetry }) {
         <div className="markdown-response">
           <ReactMarkdown>{response.message || ""}</ReactMarkdown>
         </div>
-        {response.sql && <details className="query-sql"><summary>View SQL</summary><pre><code>{response.sql}</code></pre></details>}
+        <SqlBlock sql={response.sql} />
         {(response.tables?.length > 0 || response.visualizations?.length > 0 || response.kpis?.length > 0) && (
           <div className="response-data">
             {response.tables?.map((table) => <FinancialTable key={table.id} table={table} />)}
@@ -76,6 +104,7 @@ export default function AquaMessage({ message, hidden = false, onRetry }) {
             {copyStatus === "Response copied" ? "Copied" : "Copy response"}
           </button>
           <span className="action-feedback" role="status" aria-live="polite">{copyStatus}</span>
+          {response.model && <span className="answered-by">Answered by {response.model}</span>}
         </div>
       </div>
     </article>

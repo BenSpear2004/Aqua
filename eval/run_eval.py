@@ -6,6 +6,9 @@ From the repo root, with the backend's virtual environment active and
     python eval/run_eval.py                    # test questions, no retrieval
     python eval/run_eval.py --retrieval        # same questions, with retrieval
     python eval/run_eval.py --limit 5          # quick smoke run
+    python eval/run_eval.py --ids t47          # rerun one question, e.g. after an outage
+    python eval/run_eval.py --model ollama     # compare against the other provider
+    python eval/run_eval.py --fallback         # Gemini with the app's Ollama fallback
     python eval/run_eval.py --check-gold       # run only the gold SQL, no model
 
 Each run writes eval/results/<time>-<mode>.jsonl (one line per question)
@@ -19,6 +22,7 @@ app, so the comparison is like for like.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import datetime as dt
 import json
 import sys
@@ -96,6 +100,7 @@ def evaluate(item: dict[str, Any], settings, schema, retriever) -> dict[str, Any
         "attempts": answer.attempts,
         "seconds": seconds,
         "used_retrieval": answer.used_retrieval,
+        "answered_by": answer.model,
     }
     if answer.error is not None:
         return record | {"status": answer.error_code, "error": answer.error}
@@ -116,13 +121,33 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--limit", type=int, help="only the first N questions")
     parser.add_argument(
+        "--ids", help="only these question ids, comma separated, e.g. t47,t50"
+    )
+    parser.add_argument(
         "--check-gold", action="store_true", help="run gold SQL only; no model calls"
+    )
+    parser.add_argument(
+        "--model",
+        choices=["ollama", "gemini"],
+        help="provider to evaluate; default is LLM_PROVIDER from .env",
+    )
+    parser.add_argument(
+        "--fallback",
+        action="store_true",
+        help="let Gemini outages fall back to Ollama, as the app does; off by "
+        "default so the scores measure the chosen model only",
     )
     args = parser.parse_args(argv)
 
-    settings = load_settings()
+    settings = replace(load_settings(), llm_fallback=args.fallback)
+    if args.model:
+        settings = replace(settings, llm_provider=args.model)
     schema = get_schema(settings)
-    items = load(args.dataset, args.split)[: args.limit]
+    items = load(args.dataset, args.split)
+    if args.ids:
+        wanted = {i.strip() for i in args.ids.split(",")}
+        items = [i for i in items if i["id"] in wanted]
+    items = items[: args.limit]
     if args.check_gold:
         return check_gold(items, settings, schema)
 
@@ -133,9 +158,14 @@ def main(argv: list[str] | None = None) -> int:
         retriever = VectorRetriever(settings)
 
     mode = "retrieval" if args.retrieval else "baseline"
+    model = (
+        settings.gemini_model
+        if settings.llm_provider == "gemini"
+        else settings.ollama_model
+    )
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     RESULTS.mkdir(parents=True, exist_ok=True)
-    out = RESULTS / f"{stamp}-{mode}.jsonl"
+    out = RESULTS / f"{stamp}-{mode}-{model.replace(':', '-')}.jsonl"
     records = []
     with out.open("w", encoding="utf-8") as handle:
         for number, item in enumerate(items, start=1):
@@ -148,7 +178,8 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = summarize_run(records) | {
         "mode": mode,
-        "model": settings.ollama_model,
+        "provider": settings.llm_provider,
+        "model": model,
         "dataset": args.dataset.name,
         "split": args.split,
     }

@@ -29,6 +29,11 @@ DEFAULT_GEMINI_EMBED_MODEL = "gemini-embedding-2"
 DEFAULT_APP_ORIGIN = "https://aqua-ai.us"
 DEFAULT_SESSION_MAX_AGE_SECONDS = 3600
 
+# Where SQL generation runs when LLM_PROVIDER is not set. Production sets
+# gemini (free Gemma 4) in .env; the API can also pick one per request.
+PROVIDERS = ("ollama", "gemini")
+DEFAULT_LLM_PROVIDER = "ollama"
+
 # The repo-root .env, two folders up from this file (backend/nl2sql/).
 # Inside the Docker image this path does not exist, which is fine:
 # docker-compose passes the same values in as environment variables.
@@ -61,10 +66,18 @@ class Settings:
     # The nl2sql_indexer connection, used only by the offline embedding
     # indexer (retrieval/store.py), never by the web app.
     indexer_database_url: str = field(default="", repr=False)
-    # Gemini API: embeddings for retrieval, and the free Gemma backup.
+    # Gemini API: embeddings for retrieval, and SQL generation when
+    # llm_provider is "gemini". gemma-4-31b-it is free; a paid key can
+    # use a Gemini model instead.
     gemini_api_key: str = field(default="", repr=False)
     gemini_model: str = DEFAULT_GEMINI_MODEL
     gemini_embed_model: str = DEFAULT_GEMINI_EMBED_MODEL
+    # Which provider llm.py sends prompts to: "ollama" or "gemini".
+    llm_provider: str = DEFAULT_LLM_PROVIDER
+    # When Gemini is down or out of quota, answer with Ollama instead of
+    # failing. The free tier returned HTTP 500 or 503 on 28% of questions
+    # in one eval run (docs/decisions.md).
+    llm_fallback: bool = True
     # Retrieve relevant tables and examples per question (Phase 4). Off
     # until the indexer has run and the eval shows it helps.
     retrieval: bool = False
@@ -114,8 +127,15 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
             f"OLLAMA_BASE_URL must start with http:// or https://, got {base_url!r}."
         )
 
+    provider = get("LLM_PROVIDER").lower() or DEFAULT_LLM_PROVIDER
+    if provider not in PROVIDERS:
+        raise ConfigError(
+            f"LLM_PROVIDER must be one of {', '.join(PROVIDERS)}, got {provider!r}."
+        )
+
     think = get("OLLAMA_THINK")
     retrieval = get("RETRIEVAL")
+    fallback = get("LLM_FALLBACK")
     google_client_id = get("GOOGLE_CLIENT_ID")
     if google_client_id and not _GOOGLE_CLIENT_ID.fullmatch(google_client_id):
         raise ConfigError(
@@ -150,6 +170,8 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
         gemini_api_key=get("GEMINI_API_KEY"),
         gemini_model=get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL,
         gemini_embed_model=get("GEMINI_EMBED_MODEL") or DEFAULT_GEMINI_EMBED_MODEL,
+        llm_provider=provider,
+        llm_fallback=_flag("LLM_FALLBACK", fallback) if fallback else True,
         retrieval=_flag("RETRIEVAL", retrieval) if retrieval else False,
         google_client_id=google_client_id,
         session_secret=session_secret,

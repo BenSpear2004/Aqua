@@ -12,6 +12,8 @@ Each entry records the decision, the alternatives considered, and why.
 
 ## October 2026: Ollama qwen3:8b as the default model, Gemini as backup
 
+**Superseded** by "Gemma 4 through the Gemini API as the default model" below. Kept for the record of why Ollama was chosen first.
+
 **Decision.** Use `qwen3:8b` on Ben's Ollama server (reached over Tailscale) as the default model, with reasoning on. Keep Gemini as an optional backup behind the same `llm.py` interface. This changes the model part of the stack decision above.
 
 **Alternatives.** Gemini (`gemini-3.6-flash`) as the only model; `qwen3:4b` (Ben's original default); `qwen2.5-coder:7b`; `qwen3:8b` with reasoning off.
@@ -28,7 +30,7 @@ Each entry records the decision, the alternatives considered, and why.
 
 ## October 2026: gemini-embedding-2 at 768 dimensions for retrieval
 
-**Decision.** Embed schema descriptions and example questions with `gemini-embedding-2`, requesting 768 dimensions, stored in `vector(768)` columns in a separate `retrieval` schema. Generation stays on Ollama by default; `gemma-4-31b-it` is the free Gemini API backup.
+**Decision.** Embed schema descriptions and example questions with `gemini-embedding-2`, requesting 768 dimensions, stored in `vector(768)` columns in a separate `retrieval` schema. (When this was decided, generation stayed on Ollama; it later moved to Gemma 4, see below.)
 
 **Alternatives.** `gemini-embedding-001`; `gemini-embedding-2-preview`; the full default size; an Ollama embedding model on Ben's server.
 
@@ -82,6 +84,76 @@ Each entry records the decision, the alternatives considered, and why.
 
 **Reasoning.** Retrieval runs inside the web app, so its client is a runtime dependency. The fine-tuning stack (PyTorch, Unsloth) is large and never needed by the web app.
 
+## October 2026: First evaluation, baseline against retrieval
+
+**Decision.** Turn retrieval on in production (`RETRIEVAL=on`), on the strength of the first comparison below. Re-run both modes whenever the model, prompt or dataset changes.
+
+**Results.** `pagila_v1.jsonl`, 50 test questions, `qwen3:4b` with reasoning on (the model set in the server's `.env`), October 4, 2026, on the production Tiger Cloud service.
+
+| | Baseline (every table, no examples) | Retrieval (nearest tables, 3 examples) |
+|---|---|---|
+| Execution accuracy, exact | 43/50 (86%) | 45/50 (90%) |
+| Execution accuracy, lenient | 48/50 (96%) | 49/50 (98%) |
+| Easy / medium, lenient | 15/15, 19/20 | 15/15, 20/20 |
+| Hard, lenient | 14/15 | 14/15 |
+| Rejected by the validator | 0 | 0 |
+| Questions that needed the retry | 3 | 1 |
+| Median seconds per question | 26.7 | 20.0 |
+
+One baseline question (t47) was first lost to a DNS failure reaching the database, not to the model. It was rerun alone with `python eval/run_eval.py --ids t47` and passed both ways; the baseline column includes that rerun.
+
+**What failed.** Baseline: t24 returned staff ids instead of names; t40 used a LEFT JOIN that returned films with any unrented copy rather than films never rented. Retrieval: t37 grouped actors by name, so the two different actors named Susan Davis were counted as one. Exact-only misses in both runs (t37 to t46) added a helpful count or total column, which lenient scoring accepts.
+
+**Alternatives.** Keep the full schema; wait for a larger question set before deciding.
+
+**Reasoning.** Retrieval was equal or better on every measure (tied on hard questions, ahead on medium ones and overall) and about 6 seconds faster per question, because the prompt is shorter. The gain is small in absolute terms (1 to 2 questions out of 50), so it is evidence, not proof; a larger or harder question set is the next step for the report. The t37 failure points at a real weakness (grouping by name instead of key), but fixing it by editing the prompt after reading test failures would tune to the test set. Any fix must be checked on questions the model has not been graded on, such as new train or held-out questions.
+
+## October 2026: The website calls the real API; the mock stays behind a switch
+
+**Decision.** `frontend/src/services/aquaClient.js` sends questions to `POST /api/query` and loads the model menu from `GET /api/models` through a new `apiClient.js`. Ben's mock moves to `mockClient.js` and runs only when `VITE_AQUA_USE_MOCK=true`. Every answer shows its SQL in a collapsible panel; a refused query shows the SQL that was not run.
+
+**Alternatives.** Delete the mock; call `fetch` from the components; stream partial answers.
+
+**Reasoning.** Keeping the transport in one module means the components Ben built needed no API-specific changes beyond the SQL panel. The mock is still useful for UI work and for `browser-review.mjs`, so it stays, off by default. The backend answers in one piece, so streaming would add complexity for no visible gain. Rate limits, bad questions, proxy error pages and network failures all become the one error shape the UI already renders, so a slow or failed answer never shows a raw error. Showing the SQL is a core requirement of the project.
+
+## October 2026: Production frontend served by nginx, backend on localhost only
+
+**Decision.** The frontend image builds the site and serves it with nginx on port 5173, the port the domain already pointed at. nginx forwards `/api` to the backend, waits up to 300 seconds, limits each visitor to 10 questions a minute with a burst of 5, caps request bodies at 16 KB, and sets basic security headers. The backend now binds to 127.0.0.1, so the public can reach it only through nginx.
+
+**Alternatives.** Keep `npm run dev` in production; Caddy instead of nginx; publish the backend port directly.
+
+**Reasoning.** The Vite dev server is not built for public traffic and rebuilds in memory on every start. Serving on 5173 means whatever routes aqua-ai.us to the server needs no change; HTTPS stays in front of nginx. Each question costs 20 to 80 seconds of model time, so without a limit one visitor could tie up the free Gemma quota or Ben's machine. With Cloudflare in front, nginx keys the limit on `CF-Connecting-IP`. Binding the backend to localhost closes the path around the rate limit. Commands on the server itself (`curl localhost:8000`, the eval) still work.
+
+## October 2026: Retry Gemini server errors, then fall back to Ollama
+
+**Decision.** Each Gemini call gets three attempts with a short backoff (about 2 then 4 seconds), for HTTP 500, 502, 503 and 504 only. If Gemini still fails with one of those, a 429 (spent quota) or a timeout, and `LLM_FALLBACK` is on (the default), `llm.complete()` sends the same prompt to Ollama. Bad keys and model names (400, 403, 404) never fall back. Every response now carries `model`, the model that actually answered, and the UI shows it as "Answered by". `run_eval.py` turns the fallback off unless `--fallback` is given.
+
+**Alternatives.** Only more retries; only the fallback; switch the default back to Ollama; a paid Gemini key.
+
+**Reasoning.** In the first full Gemma run, 14 of 50 questions (28%) failed on Google's side: 12 HTTP 500 and 2 HTTP 503, even with two quick attempts. The 36 questions Gemma did answer were all correct, so the problem is availability, not quality. More retries help with brief errors; the fallback covers long outages and a spent daily quota, which retries cannot. Retrying a 429 would only spend more quota, so it goes straight to the fallback. Configuration mistakes stay loud so they get fixed instead of silently running on Ollama. Showing the answering model keeps the fallback honest, and keeping it out of the eval by default means the scores still measure the model being evaluated.
+
+## October 2026: Gemma 4 through the Gemini API as the default model
+
+**Decision.** Generate SQL with `gemma-4-31b-it` on the Gemini API free tier (`LLM_PROVIDER=gemini`). Ollama (`qwen3`) on Ben's machine becomes the backup and the automatic fallback. Keep `RETRIEVAL=on`.
+
+**Results.** `pagila_v1.jsonl`, 50 test questions, October 4, 2026, on a local copy of production (Pagila v3.1.0, same roles). Fallback off, so every Gemma number is Gemma alone. Questions lost to Google's HTTP 500 and 503 errors were rerun once with the three-attempt retry; "Outages left" are those that failed again.
+
+| | qwen3:4b baseline | qwen3:4b retrieval | Gemma 4 baseline | Gemma 4 retrieval |
+|---|---|---|---|---|
+| Exact | 43/50 | 45/50 | 48/50 | 45/50 |
+| Lenient | 48/50 | 49/50 | 49/50 | 48/50 |
+| Wrong answers (SQL ran, result wrong) | 2 | 1 | 0 | 0 |
+| Outages left | 0 | 0 | 1 | 2 |
+| Hard questions, lenient | 14/15 | 14/15 | 15/15 | 13/15 (both misses are outages) |
+| Median seconds | 26.7 | 20.0 | 40.9 | 47.9 |
+
+In the first full Gemma runs, 14 of 50 questions in each mode failed on Google's side (28%) with the old two-attempt setting. In the reruns with three attempts, 3 of 28 failed again (11%); the runs were at different times, so this is not a controlled comparison.
+
+**Alternatives.** Keep `qwen3:4b` or `qwen3:8b` on Ollama as the default; a Gemini Flash model (about 20 free requests a day); a paid key.
+
+**Reasoning.** Gemma answered every question it reached correctly in both modes, including t37, the duplicate-name trap `qwen3:4b` failed with retrieval, and t24 and t40, which `qwen3:4b` failed without it. It is free and needs no team hardware. Its weaknesses are availability and speed: about 40 to 50 seconds per question, and Google's free tier fails often enough that the retry and Ollama fallback (entry above) are required, not optional.
+
+Retrieval made no measurable difference to Gemma on this set: both modes got every answered question right, so the set is too easy to separate them (a ceiling). Retrieval added more exact-only misses (t38, t41, t46), where Gemma followed the examples in adding a count or total column; lenient scoring accepts those. It stays on because it helped `qwen3:4b`, which is now the fallback, and because it keeps prompts short. Separating the two for Gemma needs the harder question set listed under open items in `CLAUDE.md`.
 ## October 4, 2026: Google sign-in without an account database
 
 **Decision.** Use Google Identity Services with a JavaScript credential callback. The backend verifies the Google ID token and login nonce, then issues a signed, expiring HttpOnly session cookie. Login and authenticated POST requests require Aqua CSRF tokens and the configured browser origin. Database queries additionally require an explicit account allowlist; empty allowlists deny all queries. Email entries apply only to verified Gmail or Google Workspace identities, while other Google accounts require an explicit Google `sub`. Google sign-in needs no client secret, redirect callback, or account database in this flow.

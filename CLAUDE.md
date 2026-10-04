@@ -20,41 +20,45 @@ The research contribution is the retrieval layer (what context the model sees) a
 
 ## Where the code lives
 
-- GitHub repo: `aqua`
+- GitHub repo: `drewUTSA/Aqua`
 - Ubuntu server checkout: `/srv/bank-ai` (the docker-compose project is also named `bank-ai`)
+- Public site: `aqua-ai.us`, served by the frontend container on port 5173
 - Local development: each person's own clone
 
-The server runs the app with docker-compose. Code changes are made locally, pushed by a human, and pulled on the server.
+The server runs the app with docker-compose. Code changes are made locally, pushed by a human, merged through a pull request, and pulled on the server. Nobody commits on the server: its GitHub key can only pull.
 
 ## Current stack
 
 | Concern | Choice |
 |---|---|
 | Backend language | Python 3.12 (not 3.14; the ML stack does not fully support 3.14 yet) |
-| API | FastAPI, served by uvicorn on port 8000 |
+| API | FastAPI, served by uvicorn on 127.0.0.1:8000, reachable from outside only through nginx |
 | Sign-in | Google Identity Services, verified server-side; signed expiring cookies, no account database |
-| Frontend | React 19 with Vite, port 5173, proxies `/api` to the backend |
+| Frontend | React 19 with Vite. Production: a static build served by nginx on port 5173, which forwards `/api` to the backend and rate-limits questions. Development: `npm run dev`, whose proxy does the same |
 | Database | PostgreSQL on Tiger Cloud free service (TimescaleDB, pgvector, pgvectorscale) |
 | Sample data | Pagila (Postgres port of Sakila) |
-| LLM | Ollama (`qwen3:8b`) by default, on Ben's server over Tailscale; Gemini API via the `google-genai` SDK as a backup. Model names read from env |
+| LLM | Gemini API with the free Gemma 4 model (`gemma-4-31b-it`) by default (`LLM_PROVIDER=gemini`); Ollama (`qwen3`) on Ben's server over Tailscale as the backup. Model names read from env |
 | Embeddings | `gemini-embedding-2` at 768 dimensions, stored in pgvector in the `retrieval` schema (Phase 4) |
 | SQL parsing and validation | `sqlglot`, Postgres dialect |
 | DB driver | `psycopg` 3 |
 | Dashboards | Tableau, connected to Tiger Cloud with a read-only role |
 | Tests | pytest |
 | Formatting | black, default settings (ruff for linting) |
-| Deployment | docker-compose on the Ubuntu server, `network_mode: host` |
+| Deployment | docker-compose on the Ubuntu server, `network_mode: host`; HTTPS is handled in front of nginx |
 | Fine-tuning (later) | Open model such as Gemma with Unsloth LoRA, served by Ollama or vLLM |
 
 Gemini cannot be fine-tuned through the free API, which is why fine-tuning targets an open model.
 
 ### Model choice
 
-No model name is hardcoded. `OLLAMA_MODEL` (default `qwen3:8b`) and, for the backup, `GEMINI_MODEL` and `GEMINI_EMBED_MODEL` come from `.env`, so switching models is a config change, not a code change. `OLLAMA_THINK` turns the model's reasoning step on or off; it is on by default because it was more accurate in testing. Gemini's free tier was too limited to be the default (see `docs/decisions.md`), so use it as a backup and keep it out of pytest. Record each model change and its eval result in `docs/decisions.md`.
+No model name is hardcoded. `LLM_PROVIDER` picks the server default (`gemini` or `ollama`), and `GEMINI_MODEL`, `OLLAMA_MODEL` and `GEMINI_EMBED_MODEL` come from `.env`, so switching models is a config change, not a code change. The default is Gemma 4 31B through the Gemini API: it is free, needs no team hardware, and the Gemini Flash models allow only about 20 free requests a day. Ollama stays as the backup and for the fine-tuned model later. The UI can pick either per question (`GET /api/models`). Keep every model out of pytest. Record each model change and its eval result in `docs/decisions.md`.
 
-### Ollama
+### Providers
 
-Ollama is the default model provider. `nl2sql/llm.py` calls it with a JSON schema so the reply is only `{"sql": ...}`, Qwen's recommended sampling settings, a fixed seed, and a 16k context. The raw Ollama call in `backend/main.py` is starter code; Phase 2 replaces it with `nl2sql.pipeline`. Gemini will sit behind the same `llm.py` interface as a backup, as will a fine-tuned model later, so the rest of the pipeline does not change when the provider does.
+Both providers sit behind the same `complete()` call in `nl2sql/llm.py`, so the rest of the pipeline does not change when the provider does.
+
+- Gemini API: Gemini models get the rules as a system instruction and a JSON schema for `{"sql": ...}`. Gemma models take neither, so for them the rules go at the top of the prompt and `generate.extract_sql` reads the SQL from the code fence Gemma writes. Free-tier Gemma answers in roughly 20 to 80 seconds and in one eval run returned HTTP 500 or 503 on 28% of questions. Each call gets three attempts with a short backoff, for server errors only (429 is not retried: it would spend more quota). If Gemini still fails with an outage, a spent quota or a timeout, and `LLM_FALLBACK` is on (the default), `complete()` sends the same prompt to Ollama. Bad keys and model names (400, 403, 404) never fall back, so configuration mistakes stay visible. The answer reports the model that actually answered.
+- Ollama: called with a JSON schema, Qwen's recommended sampling, a fixed seed and a 16k context. `OLLAMA_THINK` turns reasoning on or off; on was more accurate in testing.
 
 ## Repository layout
 
@@ -75,7 +79,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   │   ├── config.py         Loads env, exposes typed settings
 │   │   ├── db.py             Connection as the read-only role
 │   │   ├── schema.py         Reads tables, columns, keys from the database; prompt text, allowlist, table docs
-│   │   ├── llm.py            Thin model wrapper; the only file that calls a model (Ollama, Gemini backup)
+│   │   ├── llm.py            Thin model wrapper; the only file that calls a model (Gemini API, Ollama)
 │   │   ├── generate.py       Builds the prompt (schema, examples, failed attempt) and asks for SQL
 │   │   ├── validate.py       AST safety checks (layer 1)
 │   │   ├── execute.py        Runs validated SQL in a read-only transaction
@@ -84,17 +88,22 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   │   ├── response.py       Answer -> the JSON the frontend renders
 │   │   ├── pipeline.py       context -> generate -> validate -> execute, one retry if fixable
 │   │   ├── retrieval/        Phase 4: embed.py (Gemini), store.py (offline indexer), select.py
-│   │   └── querylog.py       Phase 7: logs questions, SQL, outcome
+│   │   └── querylog.py       Phase 7, not built yet: logs questions, SQL, outcome
 │   └── tests/
 │       ├── test_validate.py  Highest priority; adversarial SQL cases
 │       ├── test_db_readonly.py Confirms writes and hidden columns fail as nl2sql_reader
 │       └── test_pipeline.py  Pipeline with the LLM mocked
 ├── frontend/
-│   ├── Dockerfile
-│   ├── package.json
-│   ├── vite.config.js        Proxies /api to 127.0.0.1:8000
+│   ├── Dockerfile            Builds the site, then serves it with nginx
+│   ├── nginx.conf            Static site, /api proxy, rate limit, security headers
+│   ├── package.json          npm run dev | build | test
+│   ├── vite.config.js        Dev server; proxies /api to 127.0.0.1:8000
+│   ├── checks/               node --test suites (npm test)
 │   ├── index.html
 │   └── src/
+│       ├── services/aquaClient.js  The only API entry point components use
+│       ├── services/apiClient.js   Real transport: /api/query, /api/models, error mapping
+│       └── services/mockClient.js  Offline stand-in, on with VITE_AQUA_DEMO_MODE=true
 ├── db/
 │   ├── README.md             How to rebuild the database from scratch
 │   ├── 01_extensions.sql     vector, vectorscale
@@ -104,12 +113,12 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   └── 05_hide_columns.sql   Takes staff.password and staff.picture from the reader (Phase 5)
 ├── eval/
 │   ├── datasets/             pagila_v1.jsonl: 50 test and 25 train questions with gold SQL
-│   ├── run_eval.py           Runs the pipeline over a dataset; --retrieval, --check-gold
+│   ├── run_eval.py           Runs the pipeline over a dataset; --retrieval, --model, --fallback, --ids, --check-gold
 │   ├── metrics.py            Execution accuracy, validity rate, latency
 │   └── results/              Gitignored output
 ├── finetune/                 Later: data prep and training scripts
 └── docs/
-    ├── architecture.md
+    ├── architecture.md       How a question becomes an answer, the safety layers, deployment
     └── decisions.md          Every significant choice and why
 ```
 
@@ -117,7 +126,7 @@ Directories that only hold a `.gitkeep` are placeholders. `backend/Dockerfile` c
 
 ## API contract
 
-The frontend talks to the backend only through `/api`. Keep these shapes stable; change them only with Ben's agreement.
+The frontend talks to the backend only through `/api`, which in production goes through nginx. Keep these shapes stable; change them only with Ben's agreement. `frontend/src/services/apiClient.js` is the one place the frontend reads these shapes.
 
 | Route | Purpose |
 |---|---|
@@ -126,19 +135,22 @@ The frontend talks to the backend only through `/api`. Keep these shapes stable;
 | `POST /api/auth/google` | Body `{"credential": str}` plus `X-CSRF-Token` from config and matching `Origin`. Verifies Google's token and nonce, sets the Aqua session, returns `user`, `csrf_token`, and `can_query` |
 | `GET /api/auth/me` | Requires an Aqua session; returns `user`, `csrf_token`, and `can_query` |
 | `POST /api/auth/logout` | Requires session, matching `Origin`, and session `X-CSRF-Token`; clears the cookie and returns 204 |
-| `POST /api/query` | Requires session, matching `Origin`, session `X-CSRF-Token`, and an approved account. Body `{"question": str}`. Returns `{"status": "success" or "error", "sql": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
+| `GET /api/models` | `{"models": [{"id", "name", "description"}]}`, server default first. Lists `gemini` only when `GEMINI_API_KEY` is set |
+| `POST /api/query` | Requires session, matching `Origin`, session `X-CSRF-Token`, and an approved account. Body `{"question": str, "model": "ollama" or "gemini" (optional)}`. Returns `{"status": "success" or "error", "sql": str, "model": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
 
-Health remains public. Auth configuration or query access returns 503 when the Google client ID or session secret is missing; invalid or expired sessions return 401, and failed CSRF or account access checks return 403. Auth responses use `Cache-Control: no-store`. Authentication does not grant database access: empty account allowlists deny all queries. Email approval is restricted to verified Gmail or Google Workspace identities; other Google accounts require their verified Google `sub` in the subject allowlist. The frontend uses Google's sign-in button on a dedicated `/signin` page, restores sessions, and sends live queries with the session CSRF token. Only approved live sessions enter the workspace at `/`; logout or session/access failure clears it and returns to `/signin`. Direct `/signin` visits need the frontend's `index.html` fallback while `/api/*` stays routed to Python. `VITE_AQUA_DEMO_MODE=true` explicitly enables fictional sample data for local demonstrations. See `docs/google-signin.md` for setup and integration.
+The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. An unknown `model` is also a 422. Choosing `gemini` on a server with no key returns 400 with code `model_not_configured` and `retryable` false. `message` is a rule-based summary from `summarize.py`. `visualizations` and `kpis` come from `visualize.py`: a single number gives one KPI (`{"id", "label", "value", "type"}`) plus a `{"type": "kpi"}` visualization; labels with a measure give a `bar`, a date with a measure a `line`, each `{"id", "type", "title", "tableId": "result", "xKey", "yKey"}`; anything else leaves both empty. The frontend draws one x column, so a chart labelled by first and last name uses the first.
 
-The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. `message` is a rule-based summary from `summarize.py`. `visualizations` and `kpis` come from `visualize.py`: a single number gives one KPI (`{"id", "label", "value", "type"}`) plus a `{"type": "kpi"}` visualization; labels with a measure give a `bar`, a date with a measure a `line`, each `{"id", "type", "title", "tableId": "result", "xKey", "yKey"}`; anything else leaves both empty. The frontend draws one x column, so a chart labelled by first and last name uses the first.
+Health and the model list remain public. Auth configuration or query access returns 503 when the Google client ID or session secret is missing; invalid or expired sessions return 401, and failed CSRF or account access checks return 403. Every `/api` response uses `Cache-Control: no-store`. Authentication does not grant database access: empty account allowlists deny all queries. Email approval is restricted to verified Gmail or Google Workspace identities; other Google accounts require their verified Google `sub` in the subject allowlist. The frontend uses Google's sign-in button on a dedicated `/signin` page, restores sessions, and sends live queries with the session CSRF token. Only approved live sessions enter the workspace at `/`; logout or session/access failure clears it and returns to `/signin`. nginx serves `index.html` for direct `/signin`, `/privacy` and `/terms` visits while `/api/*` stays routed to Python. `VITE_AQUA_DEMO_MODE=true` explicitly enables fictional sample data for local demonstrations. See `docs/google-signin.md` for setup and integration.
 
 Charts use the existing `visualizations` and `kpis` fields described above; there is no separate `chart` field. Ben owns `visualize.py` and decides any change to how charts are chosen or shaped.
+
+nginx answers 429 when one visitor sends more than 10 questions a minute (burst of 5); the client shows that as a retryable "slow down" message. The UI shows `sql` under every answer, and under refused queries as the SQL that was not run. `model` names the model that actually answered (empty for outages); it differs from the one requested after a fallback to Ollama, and the UI shows it as "Answered by".
 
 ## Pipeline
 
 1. Receive a question.
 2. Build context: every table from `schema.py`, or with `RETRIEVAL=on` the nearest tables plus similar verified examples. If retrieval fails, fall back to every table.
-3. Ask the model (Ollama by default, Gemini as backup) for one SQL statement.
+3. Ask the model (Gemma 4 through the Gemini API by default, Ollama as backup) for one SQL statement.
 4. Validate the SQL with `validate.py` against the schema's allowlist. On failure, never execute.
 5. Execute in a read-only transaction with a row limit and timeout.
 6. If step 4 or 5 failed and the error is fixable (`UnsafeQueryError.fixable`, or a database error other than a timeout), ask the model once more with the failed SQL and the error. Writes, dangerous functions and catalog access are never retried.
@@ -174,6 +186,8 @@ The offline embedding indexer connects as `nl2sql_indexer` through `INDEXER_DATA
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3:8b
 OLLAMA_THINK=true
+LLM_PROVIDER=gemini
+LLM_FALLBACK=on
 GEMINI_API_KEY=
 GEMINI_MODEL=gemma-4-31b-it
 GEMINI_EMBED_MODEL=gemini-embedding-2
@@ -188,24 +202,35 @@ AUTH_ALLOWED_EMAILS=
 AUTH_ALLOWED_GOOGLE_SUBS=
 ```
 
-Read them only through `backend/nl2sql/config.py`. docker-compose passes `.env` to the backend container. Gemini rate limits are per Google Cloud project, so each developer uses an AI Studio key from their own project and the server at `/srv/bank-ai` uses a separate one.
+Production sets `RETRIEVAL=on` once the index is built (see Commands). Read them only through `backend/nl2sql/config.py`. docker-compose passes `.env` to the backend container. Gemini rate limits are per Google Cloud project, so each developer uses an AI Studio key from their own project and the server at `/srv/bank-ai` uses a separate one.
 
 `SESSION_SECRET` must contain at least 32 characters and be randomly generated; never expose it to the frontend. Session lifetime is 300 through 86400 seconds. `APP_ORIGIN` is the browser's exact HTTPS origin; loopback HTTP is supported for local development. Account allowlists are comma-separated and are checked before any schema, database, or model work. They govern the single configured database, not customer database selection. No database stores Aqua accounts or sessions.
 
 ## Phases
 
-| Phase | Goal | Done when |
-|---|---|---|
-| 0 | Repo scaffolding | Layout above exists, CI runs pytest and black |
-| 1 | Database | Pagila loaded, reader role works, write test fails as expected |
-| 2 | Baseline pipeline | `/api/query` returns validated SQL and rows; full schema in prompt; starter Ollama call in `main.py` replaced by `nl2sql.pipeline` |
-| 3 | Evaluation harness | Execution accuracy reported on a fixed question set |
-| 4 | Retrieval layer | Relevant tables and examples retrieved per question; accuracy compared to Phase 3 |
-| 5 | Validation hardening | Adversarial test suite passes |
-| 6 | React interface | Shows question, SQL, rows, and summary; served from `/srv/bank-ai` on the project domain as a production Vite build, not the dev server |
-| 7 | Logging and learning loop | Queries logged; good ones feed the example store |
+| Phase | Goal | Done when | Status |
+|---|---|---|---|
+| 0 | Repo scaffolding | Layout above exists, CI runs pytest and black | Open: no CI yet, and most older backend files are not black-formatted |
+| 1 | Database | Pagila loaded, reader role works, write test fails as expected | Done |
+| 2 | Baseline pipeline | `/api/query` returns validated SQL and rows; full schema in prompt | Done |
+| 3 | Evaluation harness | Execution accuracy reported on a fixed question set | Done; results in `docs/decisions.md` |
+| 4 | Retrieval layer | Relevant tables and examples retrieved per question; accuracy compared to Phase 3 | Done; helps qwen3:4b, no measurable difference for Gemma 4 on this set |
+| 5 | Validation hardening | Adversarial test suite passes | Done |
+| 6 | React interface | Shows question, SQL, rows, and summary; served on the project domain as a production build | Done in code; live once the server is rebuilt |
+| 7 | Logging and learning loop | Queries logged; good ones feed the example store | Not started |
 
 Work one phase at a time. Do not build ahead. Frontend work can run alongside backend phases as long as it codes against the API contract above.
+
+### Open items
+
+Agreed but not started. Each needs its own change and a `docs/decisions.md` entry when done.
+
+- Phase 7 logging: `db/06_logging.sql` with a `query_log` table and an insert-only `nl2sql_logger` role, `nl2sql/querylog.py`, and a way to promote checked pairs into `retrieval.example_query` as `query_log` rows.
+- Tableau: `db/07_tableau_role.sql`, a read-only `tableau_reader` without the 10-second timeout and with the same hidden staff columns.
+- A second, harder question set (`eval/datasets/pagila_v2.jsonl`), written before looking at model output, so the retrieval comparison rests on more than 50 questions.
+- Phase 0: one commit that black-formats the backend, then a GitHub Actions workflow running pytest, black and `npm test` on every pull request.
+- Modules over the size guideline: `schema.py`, `validate.py`, `retrieval/store.py`.
+- Fine-tuning an open model (after Phase 7, optional).
 
 ## Conventions
 
@@ -243,18 +268,21 @@ python eval/run_eval.py                # baseline: every table, no examples
 python eval/run_eval.py --retrieval    # with retrieval, for the Phase 4 comparison
 ```
 
-Local frontend development (run from `frontend/`):
+Local frontend development (run from `frontend/`; the backend must be running on port 8000, or set `VITE_AQUA_DEMO_MODE=true` to work offline):
 
 ```bash
 npm install
 npm run dev
+npm test
 ```
 
-Server (run from `/srv/bank-ai`):
+Server (run from `/srv/bank-ai`). After a merge, pull and rebuild; the frontend image builds the site itself:
 
 ```bash
-git pull
+git pull origin main
 docker compose up -d --build
+curl -s localhost:8000/api/health
+curl -s localhost:5173/api/models
 docker compose logs -f backend
 ```
 

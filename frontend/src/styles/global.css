@@ -59,6 +59,7 @@ button:disabled { cursor: not-allowed; }
 .markdown-response pre code { padding: 0; background: transparent; }
 .response-data { display: grid; gap: 24px; margin-top: 26px; }
 .response-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+.answered-by { order: -1; margin-right: auto; color: var(--color-muted); font-size: 10px; letter-spacing: .03em; opacity: .75; }
 .text-action, .financial-table__actions button { min-height: 36px; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--color-muted); cursor: pointer; font-size: 11px; transition: color var(--duration-fast), background var(--duration-fast); }
 .text-action:hover, .financial-table__actions button:hover { background: rgba(162,214,236,.06); color: var(--color-aqua-bright); }
 .action-feedback { margin: 0; color: var(--color-muted); font-size: 11px; }
@@ -67,6 +68,12 @@ button:disabled { cursor: not-allowed; }
 .error-card { box-shadow: inset 2px 0 rgba(255,158,170,.4); }
 .error-card p { margin: 0; font-size: 14px; line-height: 1.7; }
 .error-card .text-action { margin: 10px 0 0 -10px; color: #ffc2cb; }
+.sql-block { margin: 12px 0 0; border: 1px solid rgba(167,204,224,.1); border-radius: var(--radius-sm); background: rgba(5,15,27,.45); }
+.sql-block summary { padding: 8px 12px; color: var(--color-muted); cursor: pointer; font-size: 11px; letter-spacing: .03em; }
+.sql-block summary:hover { color: var(--color-aqua-bright); }
+.sql-block pre { margin: 0; padding: 4px 12px 8px; overflow-x: auto; color: var(--color-text); font: 12px/1.6 ui-monospace, "SF Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+.sql-block .text-action { margin: 0 0 4px 2px; }
+.error-card .sql-block .text-action { margin: 0 0 4px 2px; color: var(--color-muted); }
 .processing-status { display: flex; align-items: center; gap: 9px; margin: 0 26px; color: var(--color-muted); font-size: 11px; }
 .processing-status > span { width: 5px; height: 5px; border-radius: 50%; background: #89d8e5; box-shadow: 0 0 10px rgba(56,213,245,.24); }
 .composer-zone { flex: 0 0 auto; width: min(100%, var(--composer-width)); margin: auto auto 0; padding-bottom: max(4px, env(safe-area-inset-bottom)); }
