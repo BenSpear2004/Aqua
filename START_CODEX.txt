@@ -1,0 +1,23 @@
+Implement the AQUA frontend redesign now. This is an implementation task, not an audit or planning request.
+
+Read the UPDATED local files from disk in full, even if Git ignores them:
+AQUA_WEBSITE_BUILD_SPEC.md
+AQUA_CODEX_FRONTEND_CONTRACT.md
+
+Confirm both identify revision AQUA-LG-2. These replaced the old briefs. The latest approved requirements include the real Chatbar.glb shell, liquid-glass sidebar, connected message formation, and larger bubbles with a visible pop. Earlier no-sidebar, CSS-only-shell, audit-only, and per-phase stopping directions are retired.
+
+Check the working tree and confirm frontend-design is active. Preserve existing uncommitted work. Inspect what you need, then begin editing frontend files in this task and continue through implementation, local validation, and visual refinement without routine phase approvals.
+
+Use the actual assets:
+frontend/src/assets/models/Aqua_logo.glb
+frontend/src/assets/models/Chatbar.glb
+
+Select the intended clear-glass scene after inspecting the actual model. Keep real HTML controls aligned with it. Implement Ask a Question, Frequently Asked Questions, Projects with nested mock folders, and Recent Chats. Preserve mock/API separation and financial tables, exports, and previews.
+
+Do not modify backend, Docker, Cloudflare, server configuration, the root .gitignore, or these instruction documents. Do not stage, commit, push, merge, deploy, or access secrets. Use normal workspace permissions and approval mechanisms.
+
+If an actual permission or tool restriction prevents editing, report the exact failed operation/path and request the narrowly needed correction. Do not assume a permission problem, bypass a restriction, or return another audit as a substitute for implementation.
+
+Run the frontend build and available checks. Inspect actual rendered layouts and animation playback using available browser tools. Report checks that could not be performed honestly.
+
+Proceed now. Finish with the actual changes, verification results, and remaining limitations; the user will judge visual quality.
