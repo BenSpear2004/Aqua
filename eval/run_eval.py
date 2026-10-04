@@ -6,6 +6,7 @@ From the repo root, with the backend's virtual environment active and
     python eval/run_eval.py                    # test questions, no retrieval
     python eval/run_eval.py --retrieval        # same questions, with retrieval
     python eval/run_eval.py --limit 5          # quick smoke run
+    python eval/run_eval.py --ids t47          # rerun one question, e.g. after an outage
     python eval/run_eval.py --check-gold       # run only the gold SQL, no model
 
 Each run writes eval/results/<time>-<mode>.jsonl (one line per question)
@@ -116,13 +117,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--limit", type=int, help="only the first N questions")
     parser.add_argument(
+        "--ids", help="only these question ids, comma separated, e.g. t47,t50"
+    )
+    parser.add_argument(
         "--check-gold", action="store_true", help="run gold SQL only; no model calls"
     )
     args = parser.parse_args(argv)
 
     settings = load_settings()
     schema = get_schema(settings)
-    items = load(args.dataset, args.split)[: args.limit]
+    items = load(args.dataset, args.split)
+    if args.ids:
+        wanted = {i.strip() for i in args.ids.split(",")}
+        items = [i for i in items if i["id"] in wanted]
+    items = items[: args.limit]
     if args.check_gold:
         return check_gold(items, settings, schema)
 
