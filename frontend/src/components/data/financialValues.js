@@ -45,5 +45,7 @@ export function formatMetric(value, type, currency) {
     }).format(value);
   }
   if (type === "percentage") return `${value}%`;
+  // Years and ids arrive as "string" columns: 1993, never "1,993".
+  if (type === "string" || typeof value !== "number") return String(value);
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value);
 }
