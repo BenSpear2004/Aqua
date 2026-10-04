@@ -1,10 +1,11 @@
 """The one place in the pipeline that calls the language model.
 
 Two providers sit behind the same complete() call: the Gemini API (free
-Gemma 4 in production) and Ollama (qwen3 on Ben's server).
-settings.llm_provider picks one. When Gemini is down or out of quota and
-settings.llm_fallback is on, the same prompt goes to Ollama instead, so
-the user gets an answer rather than an outage. Everything about how each
+Gemini Flash-Lite in production) and Ollama (qwen3 on Ben's server).
+settings.llm_provider picks one. When the Gemini model is down or out of
+quota and settings.llm_fallback is on, the same prompt goes to each of
+settings.gemini_fallback_models (Gemma 4 26B by default), then to
+Ollama, so the user gets an answer rather than an outage. Everything about how each
 provider is called lives here: sampling settings, reasoning, structured
 output, timeouts, retries and error handling. Other modules send text
 and get text back.
@@ -13,7 +14,7 @@ and get text back.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -103,12 +104,23 @@ def complete(
     """
     if settings.llm_provider != "gemini":
         return _complete_ollama(prompt, settings, system, json_schema, client)
-    try:
-        return _complete_gemini(prompt, settings, system, json_schema, client)
-    except LLMError as exc:
-        if not (settings.llm_fallback and exc.transient):
-            raise
-        log.warning("Gemini unavailable, answering with Ollama instead: %s", exc)
+    models = [settings.gemini_model]
+    if settings.llm_fallback:
+        models += [m for m in settings.gemini_fallback_models if m not in models]
+    for model in models:
+        try:
+            return _complete_gemini(
+                prompt,
+                replace(settings, gemini_model=model),
+                system,
+                json_schema,
+                client,
+            )
+        except LLMError as exc:
+            if not (settings.llm_fallback and exc.transient):
+                raise
+            log.warning("Gemini model %s unavailable, trying the next: %s", model, exc)
+    log.warning("No Gemini model answered; answering with Ollama instead.")
     # Ollama gets the system instruction and JSON schema Gemma could not use.
     return _complete_ollama(prompt, settings, system, json_schema, None)
 

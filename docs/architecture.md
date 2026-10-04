@@ -44,14 +44,15 @@ Both containers use the host's network. Only nginx listens on an outside-facing 
 
 | Use | Model | Where |
 |---|---|---|
-| SQL generation (default) | `gemma-4-31b-it` | Gemini API, free tier |
-| SQL generation (backup) | `qwen3:8b` or `qwen3:4b` | Ollama on Ben's machine, over Tailscale |
+| SQL generation (default) | `gemini-3.5-flash-lite` | Gemini API, free tier; about 1 second |
+| SQL generation (first fallback) | `gemma-4-26b-a4b-it` | Gemini API, free tier with its own quota; 15 to 90 seconds |
+| SQL generation (last fallback) | `qwen3:8b` or `qwen3:4b` | Ollama on Ben's machine, over Tailscale |
 | Embeddings for retrieval | `gemini-embedding-2`, 768 dimensions | Gemini API, free tier |
 
-`llm.complete()` is the only function that calls a generation model. Gemma models on the API accept neither a system instruction nor a JSON schema, so for them the rules go at the top of the prompt and the SQL is read from the code fence Gemma writes. Free-tier Gemma takes roughly 20 to 80 seconds per answer and in one eval run returned HTTP 500 or 503 on 28% of questions. Two defences, both in `llm.py`:
+`llm.complete()` is the only function that calls a generation model. Gemma models on the API accept neither a system instruction nor a JSON schema, so for them the rules go at the top of the prompt and the SQL is read from the code fence Gemma writes. Gemma 4 thinks before answering (600 to 4,500 hidden reasoning tokens per question), which is why it takes 15 to 90 seconds; Flash-Lite does not, and answers in about a second. The free tier also returns HTTP 500, 503 and 429 at times (28% of questions in one Gemma run). Two defences, both in `llm.py`:
 
 1. Each Gemini call gets three attempts with a short backoff (about 2 then 4 seconds), for server errors only. A spent quota (429) is not retried, because retrying spends more.
-2. If Gemini still fails with an outage, a spent quota or a timeout, and `LLM_FALLBACK` is on, the same prompt goes to Ollama, which also gets the system rules and JSON schema Gemma cannot take. Bad keys and model names never fall back, so configuration mistakes stay visible.
+2. If a model still fails with an outage, a spent quota or a timeout, and `LLM_FALLBACK` is on, the same prompt goes to each of `GEMINI_FALLBACK_MODELS` in turn, then to Ollama, which also gets the system rules and JSON schema Gemma cannot take. Bad keys and model names never fall back, so configuration mistakes stay visible.
 
 Every answer carries the model that actually answered, and the UI shows it, so a fallback is never hidden. Only when both providers fail does the user see "not reachable right now" with a retry button. The eval turns the fallback off unless `--fallback` is given, so its scores measure the chosen model.
 
