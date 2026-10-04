@@ -21,7 +21,7 @@ export ADMIN_URL='postgresql://tsdbadmin:PASSWORD@HOST:PORT/tsdb?sslmode=require
 | 1 | `psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -f db/01_extensions.sql` | Enables pgvector and pgvectorscale |
 | 2 | `bash db/02_load_pagila.sh` | Loads Pagila schema and data, prints row counts |
 | 3 | `psql "$ADMIN_URL" -f db/03_users.sql` | Creates `nl2sql_reader`; prompts for its password |
-| 4 | `psql "$ADMIN_URL" -v ON_ERROR_STOP=1 -f db/04_retrieval.sql` | Retrieval tables (Phase 4, not written yet) |
+| 4 | `psql "$ADMIN_URL" -f db/04_retrieval.sql` | Creates the `retrieval` schema and embedding tables, and the `nl2sql_indexer` role; prompts for its password |
 
 Order matters: step 3 grants `SELECT` on the tables step 2 creates.
 

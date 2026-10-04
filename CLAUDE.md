@@ -36,7 +36,7 @@ The server runs the app with docker-compose. Code changes are made locally, push
 | Database | PostgreSQL on Tiger Cloud free service (TimescaleDB, pgvector, pgvectorscale) |
 | Sample data | Pagila (Postgres port of Sakila) |
 | LLM | Ollama (`qwen3:8b`) by default, on Ben's server over Tailscale; Gemini API via the `google-genai` SDK as a backup. Model names read from env |
-| Embeddings | Gemini embeddings stored in pgvector (Phase 4) |
+| Embeddings | `gemini-embedding-2` at 768 dimensions, stored in pgvector in the `retrieval` schema (Phase 4) |
 | SQL parsing and validation | `sqlglot`, Postgres dialect |
 | DB driver | `psycopg` 3 |
 | Dashboards | Tableau, connected to Tiger Cloud with a read-only role |
@@ -97,7 +97,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   ├── 01_extensions.sql     vector, vectorscale
 │   ├── 02_load_pagila.sh     Loads Pagila, strips OWNER TO lines
 │   ├── 03_users.sql          Creates nl2sql_reader (psql prompts for the password)
-│   └── 04_retrieval.sql      Example-query and schema-embedding tables (Phase 4)
+│   └── 04_retrieval.sql      retrieval schema, embedding tables, nl2sql_indexer role (Phase 4)
 ├── eval/
 │   ├── datasets/             Question and gold-SQL pairs (JSONL)
 │   ├── run_eval.py           Runs the pipeline over a dataset
@@ -152,6 +152,8 @@ Layer 2 is the database role. The app connects only as `nl2sql_reader`, which ha
 
 The admin account (`tsdbadmin`) must never appear in app code, `.env`, docker-compose, or tests. It is used only by a human running `db/` scripts with `ADMIN_URL` exported in their shell. Tableau also connects with a read-only role, never the admin account.
 
+The offline embedding indexer connects as `nl2sql_indexer` through `INDEXER_DATABASE_URL`. That role can write only to the `retrieval` schema and has no grants on `public`. The web app never uses it. The reader can `SELECT` from `retrieval` for similarity search, but the validator's allowlist must never include retrieval tables, so generated SQL cannot read them.
+
 ## Environment variables
 
 ```
@@ -159,9 +161,10 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3:8b
 OLLAMA_THINK=true
 GEMINI_API_KEY=
-GEMINI_MODEL=
-GEMINI_EMBED_MODEL=
+GEMINI_MODEL=gemma-4-31b-it
+GEMINI_EMBED_MODEL=gemini-embedding-2
 DATABASE_URL=postgresql://nl2sql_reader:CHANGE_ME@HOST:PORT/tsdb?sslmode=require
+INDEXER_DATABASE_URL=postgresql://nl2sql_indexer:CHANGE_ME@HOST:PORT/tsdb?sslmode=require
 ```
 
 Read them only through `backend/nl2sql/config.py`. docker-compose passes `.env` to the backend container. Gemini rate limits are per Google Cloud project, so each developer uses an AI Studio key from their own project and the server at `/srv/bank-ai` uses a separate one.
