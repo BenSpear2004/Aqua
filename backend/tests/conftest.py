@@ -44,3 +44,17 @@ def on_bank(live_database: str) -> None:
 def on_pagila(live_database: str) -> None:
     if live_database != "pagila":
         pytest.skip("needs the Pagila service; DATABASE_URL points at the bank")
+
+
+@pytest.fixture(autouse=True)
+def no_answer_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """API tests ask the same placeholder question many times with
+    different stand-in pipelines; a cached answer would leak between
+    them. Tests of the cache itself install their own."""
+    try:
+        import main
+    except ImportError:
+        return
+    from nl2sql.cache import AnswerCache
+
+    monkeypatch.setattr(main, "ANSWER_CACHE", AnswerCache(0))

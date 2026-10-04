@@ -176,3 +176,21 @@ def test_examples_and_previous_attempt_reach_the_model() -> None:
 def test_instruction_asks_for_named_columns_and_aliases() -> None:
     assert "never use SELECT *" in SYSTEM_INSTRUCTION
     assert "snake_case alias" in SYSTEM_INSTRUCTION
+
+
+def test_size_line_follows_the_question_and_precedes_a_correction() -> None:
+    prompt = build_prompt(
+        "least popular films",
+        SCHEMA,
+        size="Answer size: return the top 10.",
+        previous=Attempt("SELEC 1", "could not be parsed"),
+    )
+    assert (
+        prompt.index("Question: least popular films")
+        < prompt.index("Answer size: return the top 10.")
+        < prompt.index("Your previous SQL")
+    )
+
+
+def test_no_size_line_when_none_is_given() -> None:
+    assert "Answer size" not in build_prompt("How many films?", SCHEMA)

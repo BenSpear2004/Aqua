@@ -28,6 +28,7 @@ DEFAULT_GEMINI_MODEL = "gemma-4-31b-it"
 DEFAULT_GEMINI_EMBED_MODEL = "gemini-embedding-2"
 DEFAULT_APP_ORIGIN = "https://aqua-ai.us"
 DEFAULT_SESSION_MAX_AGE_SECONDS = 3600
+DEFAULT_ANSWER_CACHE_SECONDS = 600
 
 # Where SQL generation runs when LLM_PROVIDER is not set. Production sets
 # gemini (free Gemma 4) in .env; the API can also pick one per request.
@@ -81,6 +82,12 @@ class Settings:
     # Retrieve relevant tables and examples per question (Phase 4). Off
     # until the indexer has run and the eval shows it helps.
     retrieval: bool = False
+    # Tell the model how many rows the question asks for (answer_size.py):
+    # a number, the top 10 for plurals, first place and ties for singulars.
+    answer_size_rules: bool = True
+    # Seconds to reuse a successful answer to the same question and model.
+    # 0 turns the cache off.
+    answer_cache_seconds: int = DEFAULT_ANSWER_CACHE_SECONDS
     # Google sign-in uses an ID token, not the Gemini model API key.
     google_client_id: str = ""
     session_secret: str = field(default="", repr=False)
@@ -136,6 +143,16 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
     think = get("OLLAMA_THINK")
     retrieval = get("RETRIEVAL")
     fallback = get("LLM_FALLBACK")
+    size_rules = get("ANSWER_SIZE_RULES")
+    cache_seconds = get("ANSWER_CACHE_SECONDS")
+    try:
+        answer_cache_seconds = (
+            int(cache_seconds) if cache_seconds else DEFAULT_ANSWER_CACHE_SECONDS
+        )
+    except ValueError:
+        raise ConfigError("ANSWER_CACHE_SECONDS must be a whole number of seconds.") from None
+    if not 0 <= answer_cache_seconds <= 86400:
+        raise ConfigError("ANSWER_CACHE_SECONDS must be between 0 and 86400.")
     google_client_id = get("GOOGLE_CLIENT_ID")
     if google_client_id and not _GOOGLE_CLIENT_ID.fullmatch(google_client_id):
         raise ConfigError(
@@ -173,6 +190,10 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
         llm_provider=provider,
         llm_fallback=_flag("LLM_FALLBACK", fallback) if fallback else True,
         retrieval=_flag("RETRIEVAL", retrieval) if retrieval else False,
+        answer_size_rules=(
+            _flag("ANSWER_SIZE_RULES", size_rules) if size_rules else True
+        ),
+        answer_cache_seconds=answer_cache_seconds,
         google_client_id=google_client_id,
         session_secret=session_secret,
         app_origin=app_origin,

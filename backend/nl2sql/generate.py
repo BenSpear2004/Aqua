@@ -88,19 +88,23 @@ def build_prompt(
     schema: str,
     examples: Sequence[Example] = (),
     previous: Attempt | None = None,
+    size: str | None = None,
 ) -> str:
     """Combine the schema, examples and question into the text the model sees.
 
     Schema first, question last, so the model reads the question with the
     tables already in view. Examples sit between them as patterns to
-    follow. A failed attempt goes after the question, so the correction
-    is the last thing the model reads.
+    follow. `size` (from answer_size.py) says how many rows the question
+    wants and goes right after it. A failed attempt goes last, so the
+    correction is the last thing the model reads.
     """
     parts = [f"Schema:\n{schema}"]
     if examples:
         shown = "\n\n".join(f"Question: {e.question}\nSQL: {e.sql}" for e in examples)
         parts.append(f"Examples of questions about this database and their SQL:\n{shown}")
     parts.append(f"Question: {question}")
+    if size:
+        parts.append(size)
     if previous is not None:
         parts.append(
             f"Your previous SQL was:\n{previous.sql}\n"
@@ -135,10 +139,11 @@ def generate_sql(
     client: httpx.Client | None = None,
     examples: Sequence[Example] = (),
     previous: Attempt | None = None,
+    size: str | None = None,
 ) -> Generation:
     """Ask the model for SQL answering `question`. The SQL is not validated.
 
-    `examples` and `previous` are passed to build_prompt; see there.
+    `examples`, `previous` and `size` are passed to build_prompt; see there.
 
     `client` is passed through to llm.complete so tests can avoid the
     network.
@@ -151,7 +156,7 @@ def generate_sql(
         raise ValueError("Question is empty.")
 
     completion = complete(
-        build_prompt(question, schema, examples, previous),
+        build_prompt(question, schema, examples, previous, size),
         settings,
         system=SYSTEM_INSTRUCTION,
         json_schema=SQL_REPLY_SCHEMA,

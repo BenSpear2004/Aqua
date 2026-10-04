@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from auth.router import router as auth_router
 from auth.security import UserSession, require_database_access
+from nl2sql.cache import AnswerCache, cache_key
 from nl2sql.config import load_settings
 from nl2sql.db import DatabaseError
 from nl2sql.display import display_for
@@ -57,6 +58,10 @@ def _retriever() -> Retriever | None:
 
 
 RETRIEVER = _retriever()
+
+# Recent successful answers, reused for the same question and model
+# (ANSWER_CACHE_SECONDS; 0 turns it off). See nl2sql/cache.py.
+ANSWER_CACHE = AnswerCache(SETTINGS.answer_cache_seconds)
 
 
 def _model_name(provider: str) -> str:
@@ -137,12 +142,24 @@ def query(
         body["error"]["retryable"] = False  # asking again will not help
         return JSONResponse(status_code=400, content=body)
     settings = replace(SETTINGS, llm_provider=provider)
+    key = cache_key(
+        request.question,
+        provider,
+        _model_name(provider),
+        RETRIEVER is not None,
+        settings.answer_size_rules,
+    )
 
     try:
         schema = get_schema(settings)
-        answer = answer_question(
-            request.question, settings, schema, retriever=RETRIEVER
-        )
+        answer = ANSWER_CACHE.get(key)
+        if answer is None:
+            answer = answer_question(
+                request.question, settings, schema, retriever=RETRIEVER
+            )
+            ANSWER_CACHE.put(key, answer)
+        else:
+            log.info("answer cache hit (%s)", provider)
     except LLMError as exc:
         log.warning("model unavailable (%s): %s", provider, exc)
         return JSONResponse(

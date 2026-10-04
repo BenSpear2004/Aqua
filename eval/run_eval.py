@@ -9,6 +9,7 @@ From the repo root, with the backend's virtual environment active and
     python eval/run_eval.py --ids t47          # rerun one question, e.g. after an outage
     python eval/run_eval.py --model ollama     # compare against the other provider
     python eval/run_eval.py --fallback         # Gemini with the app's Ollama fallback
+    python eval/run_eval.py --pause 8          # stay under a per-minute token limit
     python eval/run_eval.py --check-gold       # run only the gold SQL, no model
 
 Each run writes eval/results/<time>-<mode>.jsonl (one line per question)
@@ -137,6 +138,13 @@ def main(argv: list[str] | None = None) -> int:
         help="let Gemini outages fall back to Ollama, as the app does; off by "
         "default so the scores measure the chosen model only",
     )
+    parser.add_argument(
+        "--pause",
+        type=float,
+        default=0.0,
+        help="seconds to wait between questions, to stay under a free-tier "
+        "tokens-per-minute limit (Gemma 4 26B: 16,000 input tokens a minute)",
+    )
     args = parser.parse_args(argv)
 
     settings = replace(load_settings(), llm_fallback=args.fallback)
@@ -169,6 +177,8 @@ def main(argv: list[str] | None = None) -> int:
     records = []
     with out.open("w", encoding="utf-8") as handle:
         for number, item in enumerate(items, start=1):
+            if args.pause and number > 1:
+                time.sleep(args.pause)
             record = evaluate(item, settings, schema, retriever)
             records.append(record)
             handle.write(json.dumps(record, default=str) + "\n")

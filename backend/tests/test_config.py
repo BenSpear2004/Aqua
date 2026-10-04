@@ -128,3 +128,15 @@ def test_fallback_is_on_unless_switched_off() -> None:
     assert settings_from({"LLM_FALLBACK": "off"}).llm_fallback is False
     with pytest.raises(ConfigError, match="LLM_FALLBACK"):
         settings_from({"LLM_FALLBACK": "maybe"})
+
+
+def test_answer_size_and_cache_settings() -> None:
+    settings = settings_from({})
+    assert settings.answer_size_rules is True
+    assert settings.answer_cache_seconds == 600
+    off = settings_from({"ANSWER_SIZE_RULES": "off", "ANSWER_CACHE_SECONDS": "0"})
+    assert off.answer_size_rules is False and off.answer_cache_seconds == 0
+    with pytest.raises(ConfigError, match="ANSWER_CACHE_SECONDS"):
+        settings_from({"ANSWER_CACHE_SECONDS": "ten"})
+    with pytest.raises(ConfigError, match="ANSWER_CACHE_SECONDS"):
+        settings_from({"ANSWER_CACHE_SECONDS": "-5"})

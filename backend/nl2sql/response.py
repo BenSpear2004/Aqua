@@ -146,12 +146,32 @@ def to_response(answer: Answer, display: Display | None = None) -> dict[str, Any
         "status": "success",
         "sql": answer.sql,
         "model": answer.model,
-        "message": summarize(answer.columns, answer.rows, answer.truncated),
+        "message": summarize(answer.columns, answer.rows, answer.truncated)
+        + _size_note(answer),
         "tables": [{"id": "result", "title": answer.question, "columns": columns, "rows": rows}],
         "visualizations": visualizations,
         "kpis": kpis,
         "error": None,
     }
+
+
+def _size_note(answer: Answer) -> str:
+    """Say when the answer size came from a rule, not from the question.
+
+    A plural question with no number gets the default list; a full list
+    may have been cut short, so say how to see more. A singular question
+    can return several rows when they tie, which would look like a bug
+    without a word of explanation.
+    """
+    count = len(answer.rows)
+    if answer.size.kind == "list" and count == answer.size.rows:
+        return (
+            f" Showing the top {count}. Ask for a number, such as "
+            '"top 25", to see more.'
+        )
+    if answer.size.kind == "single" and count > 1:
+        return f" {count} rows are tied for first place."
+    return ""
 
 
 def outage_response(code: str, message: str) -> dict[str, Any]:
