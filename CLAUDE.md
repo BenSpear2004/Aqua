@@ -199,7 +199,7 @@ Production sets `RETRIEVAL=on` once the index is built (see Commands). Read them
 | 1 | Database | Pagila loaded, reader role works, write test fails as expected | Done |
 | 2 | Baseline pipeline | `/api/query` returns validated SQL and rows; full schema in prompt | Done |
 | 3 | Evaluation harness | Execution accuracy reported on a fixed question set | Done; results in `docs/decisions.md` |
-| 4 | Retrieval layer | Relevant tables and examples retrieved per question; accuracy compared to Phase 3 | Done; retrieval measured equal or better |
+| 4 | Retrieval layer | Relevant tables and examples retrieved per question; accuracy compared to Phase 3 | Done; helps qwen3:4b, no measurable difference for Gemma 4 on this set |
 | 5 | Validation hardening | Adversarial test suite passes | Done |
 | 6 | React interface | Shows question, SQL, rows, and summary; served on the project domain as a production build | Done in code; live once the server is rebuilt |
 | 7 | Logging and learning loop | Queries logged; good ones feed the example store | Not started |
