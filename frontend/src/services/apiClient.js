@@ -33,6 +33,9 @@ export function normalizeResponse(body) {
   return {
     status: "success",
     sql,
+    // The model that actually answered; differs from the one chosen when
+    // the server fell back to Ollama because Gemini was unavailable.
+    model: typeof body.model === "string" ? body.model : "",
     message: typeof body.message === "string" ? body.message : "",
     tables: asArray(body.tables),
     visualizations: asArray(body.visualizations),

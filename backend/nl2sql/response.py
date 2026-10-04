@@ -101,6 +101,7 @@ def to_response(answer: Answer) -> dict[str, Any]:
         return {
             "status": "error",
             "sql": answer.sql,
+            "model": answer.model,
             "message": "",
             "tables": [],
             "visualizations": [],
@@ -120,6 +121,7 @@ def to_response(answer: Answer) -> dict[str, Any]:
     return {
         "status": "success",
         "sql": answer.sql,
+        "model": answer.model,
         "message": summarize(answer.columns, answer.rows, answer.truncated),
         "tables": [{"id": "result", "title": answer.question, "columns": columns, "rows": rows}],
         "visualizations": visualizations,
@@ -137,6 +139,7 @@ def outage_response(code: str, message: str) -> dict[str, Any]:
     return {
         "status": "error",
         "sql": "",
+        "model": "",
         "message": "",
         "tables": [],
         "visualizations": [],

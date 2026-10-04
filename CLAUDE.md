@@ -56,7 +56,7 @@ No model name is hardcoded. `LLM_PROVIDER` picks the server default (`gemini` or
 
 Both providers sit behind the same `complete()` call in `nl2sql/llm.py`, so the rest of the pipeline does not change when the provider does.
 
-- Gemini API: Gemini models get the rules as a system instruction and a JSON schema for `{"sql": ...}`. Gemma models take neither, so for them the rules go at the top of the prompt and `generate.extract_sql` reads the SQL from the code fence Gemma writes. The SDK makes at most two attempts per call, because its default retries used up free quota. Free-tier Gemma answers in roughly 20 to 80 seconds and sometimes returns HTTP 500; the pipeline reports that as a retryable outage.
+- Gemini API: Gemini models get the rules as a system instruction and a JSON schema for `{"sql": ...}`. Gemma models take neither, so for them the rules go at the top of the prompt and `generate.extract_sql` reads the SQL from the code fence Gemma writes. Free-tier Gemma answers in roughly 20 to 80 seconds and in one eval run returned HTTP 500 or 503 on 28% of questions. Each call gets three attempts with a short backoff, for server errors only (429 is not retried: it would spend more quota). If Gemini still fails with an outage, a spent quota or a timeout, and `LLM_FALLBACK` is on (the default), `complete()` sends the same prompt to Ollama. Bad keys and model names (400, 403, 404) never fall back, so configuration mistakes stay visible. The answer reports the model that actually answered.
 - Ollama: called with a JSON schema, Qwen's recommended sampling, a fixed seed and a 16k context. `OLLAMA_THINK` turns reasoning on or off; on was more accurate in testing.
 
 ## Repository layout
@@ -112,7 +112,7 @@ aqua/                         (checked out at /srv/bank-ai on the server)
 │   └── 05_hide_columns.sql   Takes staff.password and staff.picture from the reader (Phase 5)
 ├── eval/
 │   ├── datasets/             pagila_v1.jsonl: 50 test and 25 train questions with gold SQL
-│   ├── run_eval.py           Runs the pipeline over a dataset; --retrieval, --model, --ids, --check-gold
+│   ├── run_eval.py           Runs the pipeline over a dataset; --retrieval, --model, --fallback, --ids, --check-gold
 │   ├── metrics.py            Execution accuracy, validity rate, latency
 │   └── results/              Gitignored output
 ├── finetune/                 Later: data prep and training scripts
@@ -131,13 +131,13 @@ The frontend talks to the backend only through `/api`, which in production goes 
 |---|---|
 | `GET /api/health` | Liveness for the Docker healthcheck: `status`, `database_configured`, `model`, `retrieval`. Never touches the database or model |
 | `GET /api/models` | `{"models": [{"id", "name", "description"}]}`, server default first. Lists `gemini` only when `GEMINI_API_KEY` is set |
-| `POST /api/query` | Body `{"question": str, "model": "ollama" or "gemini" (optional)}`. Returns `{"status": "success" or "error", "sql": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
+| `POST /api/query` | Body `{"question": str, "model": "ollama" or "gemini" (optional)}`. Returns `{"status": "success" or "error", "sql": str, "model": str, "message": str, "tables": [...], "visualizations": [...], "kpis": [...], "error": {"code": str, "message": str, "retryable": bool} or null}` |
 
 The shape matches what the React app renders, plus `sql` so every answer shows its query. Each table is `{"id", "title", "columns": [{"key", "label", "type"}], "rows": [{key: value}]}`, where `type` is `string`, `number`, `currency`, `percentage` or `date`; dates are ISO strings. A rejected or failed query returns HTTP 200 with `status` "error", the SQL the model wrote, and the reason, so the UI can show what was blocked. An unreachable model or database returns 503 with `retryable` true; a blank or over-long question returns 422. An unknown `model` is also a 422. Choosing `gemini` on a server with no key returns 400 with code `model_not_configured` and `retryable` false. `message` is a rule-based summary from `summarize.py`. `visualizations` and `kpis` come from `visualize.py`: a single number gives one KPI (`{"id", "label", "value", "type"}`) plus a `{"type": "kpi"}` visualization; labels with a measure give a `bar`, a date with a measure a `line`, each `{"id", "type", "title", "tableId": "result", "xKey", "yKey"}`; anything else leaves both empty. The frontend draws one x column, so a chart labelled by first and last name uses the first.
 
 Charts use the existing `visualizations` and `kpis` fields described above; there is no separate `chart` field. Ben owns `visualize.py` and decides any change to how charts are chosen or shaped.
 
-nginx answers 429 when one visitor sends more than 10 questions a minute (burst of 5); the client shows that as a retryable "slow down" message. The UI shows `sql` under every answer, and under refused queries as the SQL that was not run.
+nginx answers 429 when one visitor sends more than 10 questions a minute (burst of 5); the client shows that as a retryable "slow down" message. The UI shows `sql` under every answer, and under refused queries as the SQL that was not run. `model` names the model that actually answered (empty for outages); it differs from the one requested after a fallback to Ollama, and the UI shows it as "Answered by".
 
 ## Pipeline
 
@@ -180,6 +180,7 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3:8b
 OLLAMA_THINK=true
 LLM_PROVIDER=gemini
+LLM_FALLBACK=on
 GEMINI_API_KEY=
 GEMINI_MODEL=gemma-4-31b-it
 GEMINI_EMBED_MODEL=gemini-embedding-2

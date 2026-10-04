@@ -24,9 +24,8 @@ DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 DEFAULT_GEMINI_MODEL = "gemma-4-31b-it"
 DEFAULT_GEMINI_EMBED_MODEL = "gemini-embedding-2"
 
-# Where SQL generation runs. Ollama is the default; Gemini is the backup,
-# or the demo model when a paid key is set. The API can also pick one per
-# request.
+# Where SQL generation runs when LLM_PROVIDER is not set. Production sets
+# gemini (free Gemma 4) in .env; the API can also pick one per request.
 PROVIDERS = ("ollama", "gemini")
 DEFAULT_LLM_PROVIDER = "ollama"
 
@@ -69,6 +68,10 @@ class Settings:
     gemini_embed_model: str = DEFAULT_GEMINI_EMBED_MODEL
     # Which provider llm.py sends prompts to: "ollama" or "gemini".
     llm_provider: str = DEFAULT_LLM_PROVIDER
+    # When Gemini is down or out of quota, answer with Ollama instead of
+    # failing. The free tier returned HTTP 500 or 503 on 28% of questions
+    # in one eval run (docs/decisions.md).
+    llm_fallback: bool = True
     # Retrieve relevant tables and examples per question (Phase 4). Off
     # until the indexer has run and the eval shows it helps.
     retrieval: bool = False
@@ -109,6 +112,7 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
 
     think = get("OLLAMA_THINK")
     retrieval = get("RETRIEVAL")
+    fallback = get("LLM_FALLBACK")
     return Settings(
         ollama_base_url=base_url.rstrip("/"),
         ollama_model=get("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL,
@@ -119,6 +123,7 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
         gemini_model=get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL,
         gemini_embed_model=get("GEMINI_EMBED_MODEL") or DEFAULT_GEMINI_EMBED_MODEL,
         llm_provider=provider,
+        llm_fallback=_flag("LLM_FALLBACK", fallback) if fallback else True,
         retrieval=_flag("RETRIEVAL", retrieval) if retrieval else False,
     )
 

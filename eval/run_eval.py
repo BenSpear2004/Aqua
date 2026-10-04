@@ -8,6 +8,7 @@ From the repo root, with the backend's virtual environment active and
     python eval/run_eval.py --limit 5          # quick smoke run
     python eval/run_eval.py --ids t47          # rerun one question, e.g. after an outage
     python eval/run_eval.py --model ollama     # compare against the other provider
+    python eval/run_eval.py --fallback         # Gemini with the app's Ollama fallback
     python eval/run_eval.py --check-gold       # run only the gold SQL, no model
 
 Each run writes eval/results/<time>-<mode>.jsonl (one line per question)
@@ -99,6 +100,7 @@ def evaluate(item: dict[str, Any], settings, schema, retriever) -> dict[str, Any
         "attempts": answer.attempts,
         "seconds": seconds,
         "used_retrieval": answer.used_retrieval,
+        "answered_by": answer.model,
     }
     if answer.error is not None:
         return record | {"status": answer.error_code, "error": answer.error}
@@ -129,9 +131,15 @@ def main(argv: list[str] | None = None) -> int:
         choices=["ollama", "gemini"],
         help="provider to evaluate; default is LLM_PROVIDER from .env",
     )
+    parser.add_argument(
+        "--fallback",
+        action="store_true",
+        help="let Gemini outages fall back to Ollama, as the app does; off by "
+        "default so the scores measure the chosen model only",
+    )
     args = parser.parse_args(argv)
 
-    settings = load_settings()
+    settings = replace(load_settings(), llm_fallback=args.fallback)
     if args.model:
         settings = replace(settings, llm_provider=args.model)
     schema = get_schema(settings)

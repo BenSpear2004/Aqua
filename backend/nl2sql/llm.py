@@ -1,21 +1,26 @@
 """The one place in the pipeline that calls the language model.
 
-Two providers sit behind the same complete() call: Ollama (the default,
-qwen3:8b on Ben's server) and the Gemini API (the backup, or the demo
-model when a paid key is set). settings.llm_provider picks one.
-Everything about how each is called lives here: sampling settings,
-reasoning, structured output, timeouts and error handling. Other modules
-send text and get text back.
+Two providers sit behind the same complete() call: the Gemini API (free
+Gemma 4 in production) and Ollama (qwen3 on Ben's server).
+settings.llm_provider picks one. When Gemini is down or out of quota and
+settings.llm_fallback is on, the same prompt goes to Ollama instead, so
+the user gets an answer rather than an outage. Everything about how each
+provider is called lives here: sampling settings, reasoning, structured
+output, timeouts, retries and error handling. Other modules send text
+and get text back.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from nl2sql.config import Settings
+
+log = logging.getLogger(__name__)
 
 # Qwen's recommended sampling for each mode. Their model card advises
 # against temperature 0 when reasoning is on.
@@ -36,13 +41,31 @@ TIMEOUT = httpx.Timeout(180.0, connect=10.0)
 # The Gemini SDK wants milliseconds. Same headroom as Ollama.
 GEMINI_TIMEOUT_MS = 180_000
 
-# The SDK retries on its own by default, which burned the free daily
-# quota in testing. Two attempts rides out one brief 429 or 503.
-GEMINI_ATTEMPTS = 2
+# Retries for Gemini's own server errors. The free tier returned HTTP 500
+# or 503 on 28% of eval questions with two quick attempts, so allow three
+# with a short backoff (about 2 s, then 4 s). 429 is left out on purpose:
+# retrying a spent quota only spends more; the Ollama fallback covers it.
+GEMINI_ATTEMPTS = 3
+GEMINI_RETRY_DELAY_S = 2.0
+GEMINI_RETRY_MAX_DELAY_S = 8.0
+GEMINI_RETRY_CODES = [500, 502, 503, 504]
+
+# Gemini failures worth answering with Ollama instead: Google's outages,
+# a spent quota, and timeouts. Bad keys or model names (400, 403, 404)
+# are configuration mistakes, so they fail loudly instead.
+FALLBACK_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 class LLMError(RuntimeError):
-    """Raised for any failure to get a usable reply from the model."""
+    """Raised for any failure to get a usable reply from the model.
+
+    `transient` is True when the provider was down, slow or out of quota,
+    so another provider may succeed; False for configuration mistakes.
+    """
+
+    def __init__(self, message: str, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -74,10 +97,20 @@ def complete(
 
     `client` exists for tests: an httpx.Client for Ollama, or a stand-in
     for the Gemini SDK client. Normal callers leave it out.
+
+    The returned Completion's `model` names the model that actually
+    answered, so a fallback to Ollama is visible to the caller.
     """
-    if settings.llm_provider == "gemini":
+    if settings.llm_provider != "gemini":
+        return _complete_ollama(prompt, settings, system, json_schema, client)
+    try:
         return _complete_gemini(prompt, settings, system, json_schema, client)
-    return _complete_ollama(prompt, settings, system, json_schema, client)
+    except LLMError as exc:
+        if not (settings.llm_fallback and exc.transient):
+            raise
+        log.warning("Gemini unavailable, answering with Ollama instead: %s", exc)
+    # Ollama gets the system instruction and JSON schema Gemma could not use.
+    return _complete_ollama(prompt, settings, system, json_schema, None)
 
 
 def _complete_ollama(
@@ -184,7 +217,12 @@ def _complete_gemini(
             api_key=settings.gemini_api_key,
             http_options=types.HttpOptions(
                 timeout=GEMINI_TIMEOUT_MS,
-                retry_options=types.HttpRetryOptions(attempts=GEMINI_ATTEMPTS),
+                retry_options=types.HttpRetryOptions(
+                    attempts=GEMINI_ATTEMPTS,
+                    initial_delay=GEMINI_RETRY_DELAY_S,
+                    max_delay=GEMINI_RETRY_MAX_DELAY_S,
+                    http_status_codes=GEMINI_RETRY_CODES,
+                ),
             ),
         )
     try:
@@ -194,11 +232,14 @@ def _complete_gemini(
             config=types.GenerateContentConfig(**config),
         )
     except errors.APIError as exc:
-        raise LLMError(f"Gemini returned HTTP {exc.code}: {exc.message}") from exc
+        raise LLMError(
+            f"Gemini returned HTTP {exc.code}: {exc.message}",
+            transient=exc.code in FALLBACK_CODES,
+        ) from exc
     except httpx.TimeoutException as exc:
-        raise LLMError("Gemini took too long to respond.") from exc
+        raise LLMError("Gemini took too long to respond.", transient=True) from exc
     except httpx.HTTPError as exc:
-        raise LLMError(f"Cannot reach the Gemini API: {exc}") from exc
+        raise LLMError(f"Cannot reach the Gemini API: {exc}", transient=True) from exc
 
     text = (response.text or "").strip()
     if not text:

@@ -47,7 +47,12 @@ Both containers use the host's network. Only nginx listens on an outside-facing 
 | SQL generation (backup) | `qwen3:8b` or `qwen3:4b` | Ollama on Ben's machine, over Tailscale |
 | Embeddings for retrieval | `gemini-embedding-2`, 768 dimensions | Gemini API, free tier |
 
-`llm.complete()` is the only function that calls a generation model. Gemma models on the API accept neither a system instruction nor a JSON schema, so for them the rules go at the top of the prompt and the SQL is read from the code fence Gemma writes. Free-tier Gemma takes roughly 20 to 80 seconds per answer and occasionally returns HTTP 500; the API reports that as a retryable outage and the UI offers to try again.
+`llm.complete()` is the only function that calls a generation model. Gemma models on the API accept neither a system instruction nor a JSON schema, so for them the rules go at the top of the prompt and the SQL is read from the code fence Gemma writes. Free-tier Gemma takes roughly 20 to 80 seconds per answer and in one eval run returned HTTP 500 or 503 on 28% of questions. Two defences, both in `llm.py`:
+
+1. Each Gemini call gets three attempts with a short backoff (about 2 then 4 seconds), for server errors only. A spent quota (429) is not retried, because retrying spends more.
+2. If Gemini still fails with an outage, a spent quota or a timeout, and `LLM_FALLBACK` is on, the same prompt goes to Ollama, which also gets the system rules and JSON schema Gemma cannot take. Bad keys and model names never fall back, so configuration mistakes stay visible.
+
+Every answer carries the model that actually answered, and the UI shows it, so a fallback is never hidden. Only when both providers fail does the user see "not reachable right now" with a retry button. The eval turns the fallback off unless `--fallback` is given, so its scores measure the chosen model.
 
 ## Safety
 
@@ -100,7 +105,7 @@ React and Vite. `src/services/aquaClient.js` is the only module components call:
 | Request body | 16 KB | `nginx.conf` |
 | Questions per visitor | 10 a minute, burst of 5 | `nginx.conf` |
 | Wait for an answer | 300 seconds | `nginx.conf` |
-| Model call | 180 seconds, at most 2 attempts | `llm.py` |
+| Model call | 180 seconds; Gemini gets 3 attempts on server errors, then Ollama | `llm.py` |
 | SQL statement | 10 seconds | `nl2sql_reader` role |
 | Rows returned | 1,000 | `execute.py` |
 
@@ -110,6 +115,7 @@ React and Vite. `src/services/aquaClient.js` is the only module components call:
 |---|---|---|---|
 | Model wrote unsafe SQL | 200 | Why it was refused, and the SQL that was not run | No |
 | Database refused the SQL twice | 200 | The database's reason and the SQL | No |
+| Gemini down, Ollama up | 200 | A normal answer, marked "Answered by" the Ollama model | Not needed |
 | Model or database unreachable | 503 | "Not reachable right now" | Yes |
 | Too many questions | 429 | "Wait a moment" | Yes |
 | Question empty or too long | 422 | "Keep it under 2,000 characters" | No |

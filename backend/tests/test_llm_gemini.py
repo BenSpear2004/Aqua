@@ -4,6 +4,7 @@ The SDK client is a stand-in that records each request, so these need
 no API key and spend no quota.
 """
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import httpx
@@ -18,11 +19,17 @@ SETTINGS = Settings(
     llm_provider="gemini", gemini_api_key="test-key", gemini_model="gemini-test"
 )
 
+# Error-mapping tests check what Gemini failures look like, so they turn
+# the Ollama fallback off; otherwise they would reach for a real server.
+NO_FALLBACK = replace(SETTINGS, llm_fallback=False)
+
 
 class FakeGenai:
     """Answers generate_content like the SDK; records each request."""
 
-    def __init__(self, text: str | None = '{"sql": "SELECT 1"}', error=None, candidates=()):
+    def __init__(
+        self, text: str | None = '{"sql": "SELECT 1"}', error=None, candidates=()
+    ):
         self.text = text
         self.error = error
         self.candidates = list(candidates)
@@ -40,7 +47,13 @@ class FakeGenai:
 
 def test_gemini_gets_system_instruction_schema_and_seed() -> None:
     client = FakeGenai()
-    reply = complete("question", SETTINGS, system="rules", json_schema=SQL_REPLY_SCHEMA, client=client)
+    reply = complete(
+        "question",
+        SETTINGS,
+        system="rules",
+        json_schema=SQL_REPLY_SCHEMA,
+        client=client,
+    )
 
     (request,) = client.requests
     assert request["model"] == "gemini-test"
@@ -58,8 +71,16 @@ def test_gemini_gets_system_instruction_schema_and_seed() -> None:
 def test_gemma_gets_rules_in_the_prompt_and_no_schema() -> None:
     """Gemma on the API refuses system instructions and JSON mode."""
     client = FakeGenai(text="```sql\nSELECT 1\n```")
-    settings = Settings(llm_provider="gemini", gemini_api_key="k", gemini_model="gemma-4-31b-it")
-    complete("question", settings, system="rules", json_schema=SQL_REPLY_SCHEMA, client=client)
+    settings = Settings(
+        llm_provider="gemini", gemini_api_key="k", gemini_model="gemma-4-31b-it"
+    )
+    complete(
+        "question",
+        settings,
+        system="rules",
+        json_schema=SQL_REPLY_SCHEMA,
+        client=client,
+    )
 
     (request,) = client.requests
     assert request["contents"] == "rules\n\nquestion"
@@ -69,7 +90,9 @@ def test_gemma_gets_rules_in_the_prompt_and_no_schema() -> None:
 
 def test_generate_sql_works_through_gemini() -> None:
     client = FakeGenai(text='{"sql": "SELECT title FROM film"}')
-    generation = generate_sql("List films", "CREATE TABLE film (title text);", SETTINGS, client=client)
+    generation = generate_sql(
+        "List films", "CREATE TABLE film (title text);", SETTINGS, client=client
+    )
     assert generation.sql == "SELECT title FROM film"
     assert generation.model == "gemini-test-001"
 
@@ -82,9 +105,11 @@ def test_missing_key_is_an_error_before_any_request() -> None:
 
 
 def test_api_error_becomes_an_llm_error() -> None:
-    error = errors.ClientError(429, {"error": {"code": 429, "message": "Resource exhausted"}})
+    error = errors.ClientError(
+        429, {"error": {"code": 429, "message": "Resource exhausted"}}
+    )
     with pytest.raises(LLMError, match="429"):
-        complete("q", SETTINGS, client=FakeGenai(error=error))
+        complete("q", NO_FALLBACK, client=FakeGenai(error=error))
 
 
 @pytest.mark.parametrize(
@@ -92,7 +117,7 @@ def test_api_error_becomes_an_llm_error() -> None:
 )
 def test_network_failures_become_llm_errors(error: Exception) -> None:
     with pytest.raises(LLMError):
-        complete("q", SETTINGS, client=FakeGenai(error=error))
+        complete("q", NO_FALLBACK, client=FakeGenai(error=error))
 
 
 def test_empty_reply_reports_why() -> None:
@@ -110,3 +135,91 @@ def test_automatic_function_calling_is_off() -> None:
     client = FakeGenai()
     complete("q", SETTINGS, client=client)
     assert client.requests[0]["config"].automatic_function_calling.disable is True
+
+
+# ---- retries and the Ollama fallback ----
+
+
+def ollama_answers(monkeypatch: pytest.MonkeyPatch) -> list:
+    """Replace the Ollama call; returns what it was asked."""
+    from nl2sql import llm
+    from nl2sql.llm import Completion
+
+    calls = []
+
+    def fake_ollama(prompt, settings, system, json_schema, client):
+        calls.append({"prompt": prompt, "system": system, "json_schema": json_schema})
+        return Completion(text='{"sql": "SELECT 1"}', thinking="", model="qwen3:8b")
+
+    monkeypatch.setattr(llm, "_complete_ollama", fake_ollama)
+    return calls
+
+
+def api_error(code: int) -> errors.APIError:
+    return errors.APIError(
+        code, {"error": {"code": code, "message": "boom", "status": "X"}}
+    )
+
+
+@pytest.mark.parametrize("code", [429, 500, 503])
+def test_gemini_outages_fall_back_to_ollama(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    calls = ollama_answers(monkeypatch)
+    reply = complete(
+        "q",
+        SETTINGS,
+        system="rules",
+        json_schema=SQL_REPLY_SCHEMA,
+        client=FakeGenai(error=api_error(code)),
+    )
+    assert reply.model == "qwen3:8b"  # the caller can see who answered
+    # Ollama gets the system rules and schema even though Gemma could not.
+    assert calls == [
+        {"prompt": "q", "system": "rules", "json_schema": SQL_REPLY_SCHEMA}
+    ]
+
+
+def test_timeouts_fall_back_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    ollama_answers(monkeypatch)
+    reply = complete("q", SETTINGS, client=FakeGenai(error=httpx.ReadTimeout("slow")))
+    assert reply.model == "qwen3:8b"
+
+
+@pytest.mark.parametrize("code", [400, 403, 404])
+def test_configuration_mistakes_do_not_fall_back(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """A bad key or model name should fail loudly, not hide behind Ollama."""
+    calls = ollama_answers(monkeypatch)
+    with pytest.raises(LLMError, match=f"HTTP {code}"):
+        complete("q", SETTINGS, client=FakeGenai(error=api_error(code)))
+    assert calls == []
+
+
+def test_fallback_can_be_switched_off(monkeypatch: pytest.MonkeyPatch) -> None:
+
+    calls = ollama_answers(monkeypatch)
+    with pytest.raises(LLMError) as caught:
+        complete(
+            "q",
+            replace(SETTINGS, llm_fallback=False),
+            client=FakeGenai(error=api_error(503)),
+        )
+    assert caught.value.transient is True and calls == []
+
+
+def test_successful_gemini_never_touches_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = ollama_answers(monkeypatch)
+    assert complete("q", SETTINGS, client=FakeGenai()).model == "gemini-test-001"
+    assert calls == []
+
+
+def test_retry_settings_cover_server_errors_but_not_quota() -> None:
+    from nl2sql import llm
+
+    assert llm.GEMINI_ATTEMPTS == 3
+    assert 500 in llm.GEMINI_RETRY_CODES and 503 in llm.GEMINI_RETRY_CODES
+    assert 429 not in llm.GEMINI_RETRY_CODES  # retrying a spent quota spends more
