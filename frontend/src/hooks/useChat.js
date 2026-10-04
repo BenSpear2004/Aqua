@@ -54,7 +54,7 @@ export function useChat({ demoMode = DEMO_MODE, canQuery = demoMode, csrfToken =
 
   const runRequest = useCallback(({ conversationId, requestId, modelId, prompt, replyId, userMessageId, retrying }) => {
     const controller = new AbortController();
-    requests.current.set(conversationId, { requestId, modelId, controller });
+    requests.current.set(conversationId, { requestId, modelId, replyId, userMessageId, controller });
 
     const applyResponse = (response, phase) => {
       if (controller.signal.aborted || requests.current.get(conversationId)?.requestId !== requestId) return;
@@ -97,6 +97,32 @@ export function useChat({ demoMode = DEMO_MODE, canQuery = demoMode, csrfToken =
         if (requests.current.get(conversationId)?.requestId === requestId) requests.current.delete(conversationId);
       }
     })();
+  }, [update]);
+
+  const stop = useCallback(() => {
+    const conversationId = stateRef.current.activeConversationId;
+    const running = requests.current.get(conversationId);
+    if (!running) return;
+    running.controller.abort();
+    requests.current.delete(conversationId);
+    update((current) => ({
+      ...current,
+      conversations: current.conversations.map((conversation) => {
+        if (conversation.id !== conversationId || conversation.request?.id !== running.requestId) return conversation;
+        const existing = conversation.messages.find((message) => message.id === running.replyId);
+        const reply = {
+          id: running.replyId, role: "aqua", replyTo: running.userMessageId,
+          requestId: running.requestId, conversationId, modelId: running.modelId,
+          response: { ...existing?.response, status: "stopped", message: existing?.response?.message || "", error: null }
+        };
+        return {
+          ...conversation, request: null, updatedAt: Date.now(),
+          messages: existing
+            ? conversation.messages.map((message) => message.id === reply.id ? reply : message)
+            : [...conversation.messages, reply]
+        };
+      })
+    }));
   }, [update]);
 
   const submit = useCallback((rawPrompt) => {
@@ -190,6 +216,7 @@ export function useChat({ demoMode = DEMO_MODE, canQuery = demoMode, csrfToken =
     pending: Boolean(active.request),
     waiting: active.request?.phase === "waiting",
     submit,
+    stop,
     retry,
     conversations: state.conversations,
     activeConversationId: state.activeConversationId,

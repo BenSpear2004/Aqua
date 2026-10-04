@@ -120,6 +120,8 @@ In explicit demo mode, the mock client waits approximately 1050 ms, then emits u
 
 Normalized errors finish the request, retain the prompt, remove waiting effects, and expose retry only when `retryable` is true. Retry uses a fresh request ID and replaces the existing reply without appending a second user message. Unmount aborts all outstanding controllers. An `AbortError` is cancellation, not a user-facing server error. When wiring a real stream, retain these lifecycle rules and validate complete structured descriptors at the client boundary.
 
+While a question is pending, the send arrow becomes an enabled square **Stop response** button. It aborts the active conversation's browser request, clears waiting effects, preserves any partial text and the next draft, and marks the reply stopped. Request IDs and abort checks discard late responses without affecting a newer question or another conversation. Enter in the textarea never triggers stop; keyboard users can activate the stop button itself. The synchronous backend has no cancellation endpoint, so already-running model/database work may finish even after the browser stops waiting. The main workspace logo has no visible tagline; a hidden heading retains screen-reader navigation and route-entry focus.
+
 The JSON request example above is the backend request. Conversation/request IDs and demo model IDs remain frontend routing metadata and are not sent to Python. Only `question` is sent in a live query body.
 
 ## Projects, conversations, and drafts

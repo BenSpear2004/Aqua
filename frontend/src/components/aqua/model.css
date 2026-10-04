@@ -158,6 +158,13 @@
   stroke-width: 1.8;
 }
 
+.chat-bar-stage .send-stop-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: currentColor;
+}
+
 .chat-bar-stage .send-spinner {
   width: 18px;
   height: 18px;

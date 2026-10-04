@@ -82,6 +82,7 @@ function Workspace({ auth }) {
     setBirths((current) => current.filter((messageId) => messageId !== id));
   }, []);
   const startConversation = () => { setBirths([]); chat.startConversation(); focusComposer(); };
+  const stop = () => { chat.stop(); setBirths([]); focusComposer(); };
   const selectConversation = (id) => { setBirths([]); chat.selectConversation(id); };
   const selectFAQ = (prompt) => { chat.setDraft(prompt); focusComposer(); };
 
@@ -98,7 +99,7 @@ function Workspace({ auth }) {
       <div className="main-panel" ref={backgroundRef}>
         {auth.demoMode && <span className="workspace-mode">Demo · fictional sample data</span>}
         <ChatShell messages={chat.messages} pending={chat.pending}
-          waiting={chat.waiting} onSend={send} onRetry={chat.retry} birthId={births[0] || null}
+          waiting={chat.waiting} onSend={send} onStop={stop} onRetry={chat.retry} birthId={births[0] || null}
           formingIds={births} onBirthComplete={completeBirth} originRef={originRef} inputRef={inputRef}
           draft={chat.draft} onDraftChange={chat.setDraft} focusRequest={focusRequest}
           effectKey={chat.activeConversationId} disabled={!auth.canQuery}

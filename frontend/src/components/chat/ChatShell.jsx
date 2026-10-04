@@ -12,6 +12,7 @@ export default function ChatShell({
   pending,
   waiting,
   onSend,
+  onStop,
   onRetry,
   birthId,
   onBirthComplete,
@@ -34,6 +35,7 @@ export default function ChatShell({
 
   return (
     <main className={`chat-shell${active ? " chat-shell--active" : " chat-shell--landing"}`}>
+      <h1 className="sr-only" id="workspace-heading" tabIndex={-1}>AQUA workspace</h1>
       <header className={`brand-zone${active ? " brand-zone--compact" : ""}`}>
         <div
           className={`logo-frame${active ? " logo-frame--compact" : ""}`}
@@ -46,7 +48,7 @@ export default function ChatShell({
         </div>
       </header>
 
-      {active ? (
+      {active && (
         <Conversation
           key={effectKey}
           messages={messages}
@@ -55,15 +57,12 @@ export default function ChatShell({
           formingIds={formingIds}
           onRetry={onRetry}
         />
-      ) : (
-        <section className="hero-copy" aria-label="Ask AQUA">
-          <h1 id="workspace-heading" tabIndex={-1}>Ask your financial data anything.</h1>
-        </section>
       )}
 
       <footer className={`composer-zone${active ? " composer-zone--active" : ""}`}>
         <ChatInput
           onSend={onSend}
+          onStop={onStop}
           pending={pending}
           waiting={waiting}
           active={active}
@@ -76,7 +75,7 @@ export default function ChatShell({
           disabled={disabled}
           disabledHint={disabledHint}
           maxQuestionLength={maxQuestionLength}
-          thinkingCancelled={!pending && messages.at(-1)?.response?.status === "error"}
+          thinkingCancelled={!pending && ["error", "stopped"].includes(messages.at(-1)?.response?.status)}
         />
       </footer>
 
