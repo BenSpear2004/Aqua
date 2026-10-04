@@ -1,0 +1,122 @@
+@keyframes spinner-rotate {
+  to { transform: rotate(360deg); }
+}
+
+/* SVG uses viewport coordinates and only changes its own decorative paths. */
+.message-birth {
+  position: fixed;
+  z-index: var(--layer-birth, 5);
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.message-birth__body {
+  stroke: rgba(168, 237, 252, 0.56);
+  stroke-width: 1.1;
+  filter: drop-shadow(0 10px 12px rgba(0, 9, 18, 0.28));
+}
+
+.message-birth--aqua .message-birth__body { stroke-opacity: 0.72; }
+.message-birth__reflection { stroke: rgba(218, 254, 255, 0.1); stroke-width: 3; }
+.message-birth__highlight { fill: none; stroke: rgba(231, 255, 255, 0.65); stroke-linecap: round; stroke-width: 1.3; }
+.message-birth__pressure { fill: rgba(118, 233, 251, 0.12); stroke: rgba(209, 255, 255, 0.48); stroke-width: 0.8; }
+
+/* The outer span moves. The independent body vanishes before its rim expands. */
+.thinking-bubbles {
+  position: fixed;
+  z-index: var(--layer-particles, 3);
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.thinking-bubble {
+  position: absolute;
+  bottom: auto;
+  width: var(--bubble-size);
+  height: var(--bubble-size);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  opacity: 0;
+  animation: thinking-rise var(--bubble-duration) linear forwards;
+  will-change: transform;
+}
+
+.thinking-bubble__body,
+.thinking-bubble__rim {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.thinking-bubble__body {
+  border: 1px solid rgba(170, 235, 249, 0.64);
+  background:
+    radial-gradient(ellipse at 28% 21%, rgba(246, 255, 255, 0.88) 0 4%, rgba(227, 252, 255, 0.4) 7%, transparent 23%),
+    radial-gradient(ellipse at 68% 78%, rgba(151, 232, 249, 0.32) 0 3%, transparent 22%),
+    radial-gradient(circle at 43% 39%, transparent 34%, rgba(27, 116, 155, 0.09) 58%, rgba(80, 204, 233, 0.33) 80%, rgba(224, 250, 255, 0.48) 98%);
+  box-shadow:
+    inset 1px 1px 2px rgba(222, 253, 255, 0.35),
+    inset -2px -3px 4px rgba(30, 105, 144, 0.27),
+    1px 3px 7px rgba(0, 10, 24, 0.16);
+  animation: thinking-body var(--bubble-duration) linear forwards;
+}
+
+.thinking-bubble__body::before {
+  position: absolute;
+  inset: 12% 20% 40% 10%;
+  border-top: 1px solid rgba(244, 255, 255, 0.66);
+  border-left: 1px solid rgba(237, 254, 255, 0.34);
+  border-radius: 50%;
+  content: "";
+  transform: rotate(-26deg);
+}
+
+.thinking-bubble__rim {
+  border: 0.75px solid rgba(185, 248, 255, 0.73);
+  box-shadow: inset 0 1px 1px rgba(245, 255, 255, 0.32);
+  opacity: 0;
+  animation: thinking-pop-rim var(--bubble-duration) linear forwards;
+}
+
+@keyframes thinking-rise {
+  0% { transform: translate3d(0, 0, 0); opacity: 0; }
+  9% { opacity: var(--bubble-opacity); }
+  33% { transform: translate3d(var(--bubble-wobble), calc(var(--bubble-rise) * -0.3), 0); }
+  64% { transform: translate3d(calc(var(--bubble-drift) * 0.62), calc(var(--bubble-rise) * -0.67), 0); }
+  89%, 100% { transform: translate3d(var(--bubble-drift), calc(var(--bubble-rise) * -1), 0); opacity: var(--bubble-opacity); }
+}
+
+@keyframes thinking-body {
+  0% { transform: scale(0.24, 0.2); opacity: 0.1; }
+  10% { transform: scale(0.92, 1.04); opacity: 1; }
+  36% { transform: scale(1.04, 0.96); opacity: 1; }
+  67%, 83% { transform: scale(0.98, 1.02); opacity: 1; }
+  86% { transform: scale(0.93, 1.12); opacity: 1; }
+  89% { transform: scale(1.16); opacity: 1; }
+  90%, 100% { transform: scale(1.16); opacity: 0; }
+}
+
+@keyframes thinking-pop-rim {
+  0%, 88% { transform: scale(1.04); opacity: 0; }
+  90% { transform: scale(1.16); opacity: 0.8; }
+  100% { transform: scale(1.65); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .thinking-bubbles, .message-birth { display: none !important; }
+}
