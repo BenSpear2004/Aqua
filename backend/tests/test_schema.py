@@ -135,50 +135,43 @@ def test_quotes_in_enum_labels_are_escaped() -> None:
 # ---- against the real database ----
 
 SETTINGS = load_settings()
-needs_db = pytest.mark.skipif(
-    not SETTINGS.database_url, reason="DATABASE_URL is not set"
-)
 
 
 @pytest.fixture(scope="module")
-def pagila() -> Schema:
+def real_schema(live_database: str) -> Schema:
     with connect(SETTINGS) as conn:
         return load_schema(conn)
 
 
-@needs_db
-def test_real_schema_has_the_pagila_tables_without_partitions(pagila: Schema) -> None:
-    assert len(pagila.tables) == 15
-    assert {"film", "payment", "rental", "staff"} <= pagila.allowed_tables
-    assert not any(name.startswith("payment_p") for name in pagila.tables)
+def test_real_schema_has_the_pagila_tables_without_partitions(on_pagila: None, real_schema: Schema) -> None:
+    assert len(real_schema.tables) == 15
+    assert {"film", "payment", "rental", "staff"} <= real_schema.allowed_tables
+    assert not any(name.startswith("payment_p") for name in real_schema.tables)
 
 
-@needs_db
-def test_real_schema_hides_staff_secrets(pagila: Schema) -> None:
-    staff_columns = {c.name for c in pagila.tables["staff"].columns}
+def test_real_schema_hides_staff_secrets(on_pagila: None, real_schema: Schema) -> None:
+    staff_columns = {c.name for c in real_schema.tables["staff"].columns}
     for _, column in HIDDEN_COLUMNS:
         assert column not in staff_columns
-    assert "password" not in pagila.to_prompt()
+    assert "password" not in real_schema.to_prompt()
 
 
-@needs_db
-def test_real_schema_has_types_keys_and_values(pagila: Schema) -> None:
-    prompt = pagila.to_prompt()
+def test_real_schema_has_types_keys_and_values(on_pagila: None, real_schema: Schema) -> None:
+    prompt = real_schema.to_prompt()
     assert (
         "CREATE TYPE mpaa_rating AS ENUM ('G', 'PG', 'PG-13', 'R', 'NC-17');" in prompt
     )
     assert "FOREIGN KEY (city_id) REFERENCES city(city_id)" in prompt
     assert "ON UPDATE" not in prompt  # write-only detail, trimmed
-    names = {c.name: c for c in pagila.tables["category"].columns}["name"].values
+    names = {c.name: c for c in real_schema.tables["category"].columns}["name"].values
     assert "Horror" in names
     # Too many distinct titles to list, and arrays are never listed.
-    film = {c.name: c for c in pagila.tables["film"].columns}
+    film = {c.name: c for c in real_schema.tables["film"].columns}
     assert film["title"].values == () and film["special_features"].values == ()
 
 
-@needs_db
-def test_real_schema_never_lists_personal_values(pagila: Schema) -> None:
-    for table in pagila.tables.values():
+def test_real_schema_never_lists_personal_values(live_database: str, real_schema: Schema) -> None:
+    for table in real_schema.tables.values():
         for column in table.columns:
             if any(
                 word in column.name for word in ("email", "phone", "address", "user")
@@ -186,9 +179,29 @@ def test_real_schema_never_lists_personal_values(pagila: Schema) -> None:
                 assert column.values == ()
 
 
-@needs_db
-def test_real_payment_joins_by_column_names(pagila: Schema) -> None:
-    assert pagila.related(["payment"]) >= {"customer", "rental", "staff"}
+def test_real_payment_joins_by_column_names(on_pagila: None, real_schema: Schema) -> None:
+    assert real_schema.related(["payment"]) >= {"customer", "rental", "staff"}
+
+
+def test_real_bank_schema_has_its_eight_tables(on_bank: None, real_schema: Schema) -> None:
+    assert real_schema.allowed_tables == {
+        "account", "card", "client", "disp", "district", "loan", "order", "trans"
+    }
+
+
+def test_real_bank_prompt_explains_codes_and_quotes_order(on_bank: None, real_schema: Schema) -> None:
+    prompt = real_schema.to_prompt()
+    assert 'CREATE TABLE "order" (' in prompt
+    assert "PRIJEM = credit" in prompt
+    assert "-- Loans granted to accounts." in prompt
+    assert "FOREIGN KEY (account_id) REFERENCES account(account_id)" in prompt
+
+
+def test_real_bank_blank_purposes_are_shown_quoted(on_bank: None, real_schema: Schema) -> None:
+    trans = {c.name: c for c in real_schema.tables["trans"].columns}
+    order = {c.name: c for c in real_schema.tables["order"].columns}
+    assert "' '" in trans["k_symbol"].values
+    assert "''" in order["k_symbol"].values
 
 
 # ---- comments ----
