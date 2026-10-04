@@ -81,3 +81,11 @@ Each entry records the decision, the alternatives considered, and why.
 **Alternatives.** Keep it in `requirements-ml.txt` and install that in the image.
 
 **Reasoning.** Retrieval runs inside the web app, so its client is a runtime dependency. The fine-tuning stack (PyTorch, Unsloth) is large and never needed by the web app.
+
+## October 2026: Phase 3 baseline on qwen3:8b
+
+**Decision.** The Phase 3 baseline is qwen3:8b with reasoning on, the full schema and no retrieval, on the 50 test questions in `eval/datasets/pagila_v1.jsonl`: 100% lenient and 80% exact execution accuracy, 100% valid SQL, no rejections or database errors, 2 retries, median 20 s per question (slowest 76 s). By difficulty, exact was 15/15 easy, 16/20 medium and 9/15 hard; lenient was 100% for each. Phase 4 is compared against these numbers.
+
+**Alternatives.** Report exact accuracy only; run the baseline with reasoning off.
+
+**Reasoning.** All 10 exact misses were correct answers with an extra column, either an id or the count the query ranked or filtered by, which lenient scoring accepts; exact is kept so the difference stays visible. Both retries were ILIKE on the `rating` enum, which Postgres refuses; the prompt now says to compare enums with `=`, so those questions should take one attempt. Reasoning stays on because it was more accurate in earlier testing. With lenient accuracy at 100%, this set cannot show retrieval improving accuracy, so Phase 4 should also report prompt size and latency, and a harder question set is needed to measure accuracy gains.
