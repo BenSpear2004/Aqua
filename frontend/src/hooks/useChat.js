@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FAQS, PROJECTS, createInitialChatState } from "../mocks/navigation.js";
 import { AI_MODELS } from "../mocks/aiModels.js";
 import { retryMessage as retryRequest, sendMessage } from "../services/aquaClient.js";
+import { DEMO_MODE } from "../services/runtimeConfig.js";
 
 let nextId = 0;
 const createId = (kind) => `${kind}-${Date.now()}-${nextId++}`;
@@ -10,8 +11,10 @@ const unexpectedResponse = () => ({
   error: { code: "unexpected", message: "AQUA couldn't complete that request. Please try again.", retryable: true }
 });
 
-export function useChat() {
-  const [state, setState] = useState(createInitialChatState);
+export function useChat({ demoMode = DEMO_MODE, canQuery = demoMode, csrfToken = "", onAuthFailure } = {}) {
+  const [state, setState] = useState(() => createInitialChatState({ demoMode }));
+  const access = useRef(null);
+  access.current = { demoMode, canQuery, csrfToken, onAuthFailure };
   const stateRef = useRef(state);
   const requests = useRef(new Map());
   const mounted = useRef(true);
@@ -37,7 +40,9 @@ export function useChat() {
     const controller = new AbortController();
     requests.current.set(conversationId, { requestId, modelId, controller });
 
-    const applyResponse = (response, phase) => update((current) => ({
+    const applyResponse = (response, phase) => {
+      if (controller.signal.aborted || requests.current.get(conversationId)?.requestId !== requestId) return;
+      update((current) => ({
       ...current,
       conversations: current.conversations.map((conversation) => {
         if (conversation.id !== conversationId || conversation.request?.id !== requestId) return conversation;
@@ -52,7 +57,8 @@ export function useChat() {
             : [...conversation.messages, reply]
         };
       })
-    }));
+      }));
+    };
 
     void (async () => {
       try {
@@ -61,11 +67,14 @@ export function useChat() {
           conversationId,
           requestId,
           modelId,
+          demoMode: access.current.demoMode,
+          csrfToken: access.current.csrfToken,
           signal: controller.signal,
           onFirstContent: (fragment) => applyResponse(fragment, "streaming"),
           onContent: (fragment) => applyResponse(fragment, "streaming")
         });
         applyResponse(response, "complete");
+        if (!controller.signal.aborted && mounted.current && ["sign_in_required", "access_denied"].includes(response.error?.code)) access.current.onAuthFailure?.();
       } catch (error) {
         if (error?.name !== "AbortError") applyResponse(unexpectedResponse(), "complete");
       } finally {
@@ -78,7 +87,7 @@ export function useChat() {
     const prompt = rawPrompt.trim();
     const current = stateRef.current;
     const conversation = current.conversations.find((item) => item.id === current.activeConversationId);
-    if (!prompt || !conversation || conversation.request) return null;
+    if (!access.current.canQuery || !prompt || !conversation || conversation.request) return null;
     const requestId = createId("request");
     const userMessageId = createId("message");
     const replyId = createId("message");
@@ -101,7 +110,7 @@ export function useChat() {
   const retry = useCallback((messageId) => {
     const current = stateRef.current;
     const conversation = current.conversations.find((item) => item.id === current.activeConversationId);
-    if (!conversation || conversation.request) return;
+    if (!access.current.canQuery || !conversation || conversation.request) return;
     const reply = conversation.messages.find((message) => message.id === messageId);
     const prompt = conversation.messages.find((message) => message.id === reply?.replyTo)?.content;
     if (!prompt || reply?.response?.status !== "error" || !reply.response.error?.retryable) return;
@@ -140,13 +149,13 @@ export function useChat() {
     update((current) => ({
       ...current,
       conversations: current.conversations.map((conversation) => conversation.id === current.activeConversationId
-        ? { ...conversation, draft: String(draft).slice(0, 10000) }
+        ? { ...conversation, draft: String(draft).slice(0, access.current.demoMode ? 10000 : 2000) }
         : conversation)
     }));
   }, [update]);
 
   const setModelId = useCallback((modelId) => {
-    if (!AI_MODELS.some((model) => model.id === modelId)) return;
+    if (!access.current.demoMode || !AI_MODELS.some((model) => model.id === modelId)) return;
     update((current) => current.selectedModelId === modelId ? current : { ...current, selectedModelId: modelId });
   }, [update]);
 
@@ -168,10 +177,10 @@ export function useChat() {
     retry,
     conversations: state.conversations,
     activeConversationId: state.activeConversationId,
-    models: AI_MODELS,
+    models: demoMode ? AI_MODELS : [],
     selectedModelId: state.selectedModelId,
     setModelId,
-    projects: PROJECTS,
+    projects: demoMode ? PROJECTS : [],
     faqs: FAQS,
     expandedFolderIds: state.expandedFolderIds,
     toggleFolder,

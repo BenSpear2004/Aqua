@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN useradd --create-home appuser
 COPY --chown=appuser:appuser main.py .
+COPY --chown=appuser:appuser auth ./auth
 COPY --chown=appuser:appuser nl2sql ./nl2sql
 USER appuser
 

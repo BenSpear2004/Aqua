@@ -7,7 +7,6 @@ skipped when DATABASE_URL is not set.
 
 import psycopg
 import pytest
-from sqlglot import exp
 
 from nl2sql import execute as execute_module
 from nl2sql.config import Settings, load_settings

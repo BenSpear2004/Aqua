@@ -1,4 +1,5 @@
 import { createMockResponse } from "../mocks/mockResponses.js";
+import { DEMO_MODE } from "./runtimeConfig.js";
 
 const MOCK_DELAY_MS = 1050;
 const STREAM_STEP_MS = 85;
@@ -43,10 +44,42 @@ async function mockRequest({ prompt, conversationId, requestId, modelId, signal,
   return response;
 }
 
+function safeError(code, message, retryable = false) {
+  return { status: "error", message: "", sql: "", tables: [], visualizations: [], kpis: [], error: { code, message, retryable } };
+}
+
+async function liveRequest({ prompt, csrfToken, signal }) {
+  if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError");
+  if (!csrfToken) return safeError("sign_in_required", "Please sign in to ask AQUA a question.");
+  try {
+    const response = await fetch("/api/query", {
+      method: "POST", credentials: "same-origin", cache: "no-store", signal,
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+      body: JSON.stringify({ question: prompt })
+    });
+    if (response.status === 401) return safeError("sign_in_required", "Your session has ended. Please sign in again.");
+    if (response.status === 403) return safeError("access_denied", "Your account cannot access this data right now. Please check your access and try again.");
+    if (response.status === 422) return safeError("invalid_question", "Enter a question of up to 2,000 characters.");
+    if (!response.ok) return safeError("unavailable", "AQUA couldn't complete that request. Please try again.", true);
+    const body = await response.json();
+    if (!["success", "error"].includes(body?.status) || typeof body.message !== "string"
+      || !["tables", "visualizations", "kpis"].every((key) => Array.isArray(body[key]))) {
+      return safeError("unavailable", "AQUA couldn't complete that request. Please try again.", true);
+    }
+    if (body.status === "error") {
+      return { ...safeError("query_failed", "AQUA couldn't answer that question. Try rephrasing it."), sql: typeof body.sql === "string" ? body.sql : "" };
+    }
+    return { status: "success", message: body.message, sql: typeof body.sql === "string" ? body.sql : "", tables: body.tables, visualizations: body.visualizations, kpis: body.kpis, error: null };
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
+    return safeError("unavailable", "AQUA couldn't complete that request. Please try again.", true);
+  }
+}
+
 export function sendMessage(options) {
-  return mockRequest(options);
+  return (options.demoMode ?? DEMO_MODE) ? mockRequest(options) : liveRequest(options);
 }
 
 export function retryMessage(options) {
-  return mockRequest(options, true);
+  return (options.demoMode ?? DEMO_MODE) ? mockRequest(options, true) : liveRequest(options);
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ModelSelector from "./ModelSelector.jsx";
+import AccountProfile from "../auth/AccountProfile.jsx";
 import "../../styles/sidebar.css";
 
 function NavIcon({ kind, className = "" }) {
@@ -55,11 +56,11 @@ function ProjectFolder({ folder, conversations, activeConversationId, expandedFo
   );
 }
 
-function SidebarContent({ conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder, onStartConversation, onSelectConversation, onSelectFAQ, models, selectedModelId, onSelectModel, idPrefix }) {
+function SidebarContent({ conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder, onStartConversation, onSelectConversation, onSelectFAQ, models, selectedModelId, onSelectModel, auth, idPrefix }) {
   const recent = conversations.filter((conversation) => conversation.messages.length).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
   return (
     <>
-      <ModelSelector models={models} selectedModelId={selectedModelId} onSelectModel={onSelectModel} />
+      {models.length > 0 ? <ModelSelector models={models} selectedModelId={selectedModelId} onSelectModel={onSelectModel} /> : <div className="model-selector"><span className="model-selector__name">AQUA</span></div>}
       <button className="sidebar-ask" type="button" onClick={onStartConversation}>
         <NavIcon kind="plus" />
         <span>Ask a Question</span>
@@ -76,15 +77,17 @@ function SidebarContent({ conversations, activeConversationId, projects, faqs, e
           <ul className="sidebar-list sidebar-projects">
             {projects.map((folder) => <ProjectFolder key={folder.id} folder={folder} conversations={conversations} activeConversationId={activeConversationId} expandedFolderIds={expandedFolderIds} onToggleFolder={onToggleFolder} onSelectConversation={onSelectConversation} idPrefix={idPrefix} />)}
           </ul>
+          {!projects.length && <p className="sidebar-empty">No projects in this session.</p>}
         </section>
         <section className="sidebar-section" aria-labelledby={`${idPrefix}-recent-heading`}>
           <h2 id={`${idPrefix}-recent-heading`}>Recent Chats</h2>
           <ul className="sidebar-list sidebar-recents">
             {recent.map((conversation) => <li key={conversation.id}><ConversationLink conversation={conversation} activeConversationId={activeConversationId} onSelectConversation={onSelectConversation} /></li>)}
           </ul>
+          {!recent.length && <p className="sidebar-empty">Your conversations will appear here.</p>}
         </section>
       </nav>
-      <div className="sidebar-footer"><span className="sidebar-footer__dot" aria-hidden="true" /><span>Mock workspace</span></div>
+      <AccountProfile auth={auth} />
     </>
   );
 }
@@ -103,7 +106,8 @@ export default function Sidebar({
   backgroundRef,
   models,
   selectedModelId,
-  onSelectModel
+  onSelectModel,
+  auth
 }) {
   const [open, setOpen] = useState(false);
   const [mobileLayout, setMobileLayout] = useState(() => window.matchMedia("(max-width: 900px)").matches);
@@ -181,7 +185,7 @@ export default function Sidebar({
     };
   }, [open, backgroundRef]);
 
-  const data = { conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder, models, selectedModelId, onSelectModel };
+  const data = { conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder, models, selectedModelId, onSelectModel, auth };
   const desktopActions = {
     onStartConversation: () => { onStartConversation(); onComposerFocus?.(); },
     onSelectConversation,

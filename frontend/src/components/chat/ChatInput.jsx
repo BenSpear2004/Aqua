@@ -7,7 +7,7 @@ const Chatbar3D = lazy(() => import("../aqua/Chatbar3D.jsx"));
 
 export default function ChatInput({
   draft = "", onDraftChange, inputRef, focusRequest, onSend, pending, waiting = pending,
-  active, originRef, effectKey, thinkingCancelled,
+  active, originRef, effectKey, thinkingCancelled, disabled = false, disabledHint, maxQuestionLength = 10000,
 }) {
   const ownInputRef = useRef(null);
   const textareaRef = inputRef ?? ownInputRef;
@@ -23,7 +23,7 @@ export default function ChatInput({
   const controlled = Boolean(onDraftChange);
   const value = controlled ? draft : localDraft;
   const setValue = controlled ? onDraftChange : setLocalDraft;
-  const canSend = Boolean(value.trim()) && !pending;
+  const canSend = Boolean(value.trim()) && !pending && !disabled;
   const geometry = ready && !failed ? layout : null;
   const onReady = useCallback(() => setReady(true), []);
   const onFailure = useCallback(() => setFailed(true), []);
@@ -71,7 +71,7 @@ export default function ChatInput({
   const send = (event) => {
     event.preventDefault();
     if (!canSend) return;
-    onSend(value.trim());
+    if (onSend(value.trim()) === null) return;
     setValue("");
     setPressure(true);
     clearTimeout(pressureTimer.current);
@@ -115,7 +115,8 @@ export default function ChatInput({
           onBlur={() => setFocused(false)}
           placeholder="Ask AQUA about your financial data..."
           rows={2}
-          maxLength={10000}
+          maxLength={maxQuestionLength}
+          disabled={disabled}
           spellCheck="true"
           aria-describedby={`${promptId}-hint`}
         />
@@ -134,7 +135,7 @@ export default function ChatInput({
         </button>
       </form>
       <p className="composer-hint" id={`${promptId}-hint`}>
-        {active ? "Enter to send · Shift + Enter for a new line" : "Enter to ask · Shift + Enter for a new line"}
+        {disabled ? disabledHint : active ? "Enter to send · Shift + Enter for a new line" : "Enter to ask · Shift + Enter for a new line"}
       </p>
     </div>
   );

@@ -21,7 +21,10 @@ export default function ChatShell({
   draft,
   onDraftChange,
   focusRequest,
-  effectKey
+  effectKey,
+  disabled = false,
+  disabledHint,
+  maxQuestionLength = 10000
 }) {
   const active = messages.length > 0;
   const birthMessage = messages.find((message) => message.id === birthId);
@@ -54,7 +57,7 @@ export default function ChatShell({
         />
       ) : (
         <section className="hero-copy" aria-label="Ask AQUA">
-          <h1>Ask your financial data anything.</h1>
+          <h1 id="workspace-heading" tabIndex={-1}>Ask your financial data anything.</h1>
         </section>
       )}
 
@@ -70,6 +73,9 @@ export default function ChatShell({
           onDraftChange={onDraftChange}
           focusRequest={focusRequest}
           effectKey={effectKey}
+          disabled={disabled}
+          disabledHint={disabledHint}
+          maxQuestionLength={maxQuestionLength}
           thinkingCancelled={!pending && messages.at(-1)?.response?.status === "error"}
         />
       </footer>

@@ -48,9 +48,9 @@ const SEEDS = [
   }
 ];
 
-export function createInitialChatState() {
+export function createInitialChatState({ demoMode = true } = {}) {
   const now = Date.now();
-  const conversations = SEEDS.map(({ id, title, prompt, scenario, adapt }, index) => {
+  const conversations = (demoMode ? SEEDS : []).map(({ id, title, prompt, scenario, adapt }, index) => {
     const base = createMockResponse(scenario);
     const response = adapt ? adapt(base) : base;
     return {
@@ -69,7 +69,7 @@ export function createInitialChatState() {
   return {
     conversations,
     activeConversationId: "conversation-start",
-    selectedModelId: DEFAULT_MODEL_ID,
-    expandedFolderIds: ["company-analysis", "statements", "forecasting"]
+    selectedModelId: demoMode ? DEFAULT_MODEL_ID : "server",
+    expandedFolderIds: demoMode ? ["company-analysis", "statements", "forecasting"] : []
   };
 }

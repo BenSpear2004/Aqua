@@ -291,3 +291,112 @@ TIMESCALE_SCHEMAS = [
 def test_timescaledb_schemas_are_blocked(schema: str) -> None:
     with pytest.raises(UnsafeQueryError, match="system catalog"):
         validate_sql(f"SELECT * FROM {schema}.hypertable")
+
+
+# ---- hidden columns (Phase 5) ----
+
+# staff is allowed, but its password hash and picture never are. The
+# database also refuses them (db/05_hide_columns.sql); this is layer 1.
+WITH_STAFF = ["staff", "rental", "payment", "film"]
+
+HIDDEN_COLUMN_ATTACKS = [
+    ("SELECT password FROM staff", "hidden column: password"),
+    ("SELECT s.password FROM staff s", "hidden column: password"),
+    ('SELECT "PASSWORD" FROM staff', "hidden column: password"),
+    # Guessing the hash one character at a time never shows the column.
+    ("SELECT username FROM staff WHERE password LIKE 'a%'", "hidden column: password"),
+    ("SELECT username FROM staff ORDER BY password", "hidden column: password"),
+    ("SELECT md5(picture::text) FROM staff", "hidden column: picture"),
+    # A star would include the hidden columns.
+    ("SELECT * FROM staff", "named columns from staff"),
+    ("SELECT s.* FROM staff s", "named columns from staff"),
+    ("SELECT * FROM (SELECT * FROM staff) t", "named columns from staff"),
+    ("SELECT t.* FROM rental r JOIN staff t ON r.staff_id = t.staff_id", "named columns from staff"),
+    ("WITH x AS (SELECT * FROM staff) SELECT first_name FROM x", "named columns from staff"),
+    # The whole row as one value also includes them.
+    ("SELECT row_to_json(s) FROM staff s", "whole staff row"),
+    ("SELECT to_jsonb(staff) FROM staff", "whole staff row"),
+    ("SELECT s FROM staff s", "whole staff row"),
+]
+
+
+@pytest.mark.parametrize(("sql", "reason"), HIDDEN_COLUMN_ATTACKS)
+def test_hidden_staff_columns_are_rejected(sql: str, reason: str) -> None:
+    with pytest.raises(UnsafeQueryError, match=reason):
+        validate_sql(sql, allowed_tables=WITH_STAFF)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT first_name, last_name, email FROM staff",
+        "SELECT count(*) FROM staff",  # a star inside COUNT is not a column list
+        "SELECT s.first_name, count(*) AS n FROM staff s JOIN payment p ON p.staff_id = s.staff_id GROUP BY s.first_name",
+        "SELECT * FROM film",  # stars are fine when staff is not involved
+        "SELECT title FROM film WHERE title = 'password'",  # the word as data
+    ],
+)
+def test_ordinary_staff_queries_pass(sql: str) -> None:
+    assert isinstance(validate_sql(sql, allowed_tables=WITH_STAFF), exp.Query)
+
+
+# ---- the app's own tables (Phase 5) ----
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT question, sql FROM retrieval.example_query",
+        "SELECT * FROM retrieval.schema_doc",
+        "SELECT title FROM film WHERE title IN (SELECT question FROM retrieval.example_query)",
+    ],
+)
+def test_retrieval_schema_is_always_blocked(sql: str) -> None:
+    """Blocked even without an allowlist, like the system catalogs."""
+    with pytest.raises(UnsafeQueryError, match="internal tables"):
+        validate_sql(sql)
+
+
+# ---- more dangerous Postgres functions (Phase 5) ----
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT pg_notify('chan', 'hi')",  # sends a message to other sessions
+        "SELECT nextval('film_film_id_seq')",  # changes a sequence
+        "SELECT setval('film_film_id_seq', 1)",
+        "SELECT lo_get(1234)",  # reads a large object
+        "SELECT pg_ls_logdir()",
+        "SELECT pg_try_advisory_lock(1)",
+        "SELECT postgres_fdw_get_connections()",
+        "SELECT dblink_connect('host=evil')",
+    ],
+)
+def test_more_postgres_functions_are_rejected(sql: str) -> None:
+    with pytest.raises(UnsafeQueryError, match="forbidden function"):
+        validate_sql(sql)
+
+
+# ---- which rejections the model may retry (Phase 5) ----
+
+
+@pytest.mark.parametrize(
+    ("sql", "fixable"),
+    [
+        ("SELEC title FROM film", True),  # a typo the model can correct
+        ("SELECT * FROM customer", True),  # a table it should not use
+        ("SELECT password FROM staff", True),  # it can name other columns
+        ("DELETE FROM film", False),  # the question asked for a write
+        ("SELECT pg_sleep(5)", False),
+        ("SELECT * FROM pg_user", False),
+    ],
+)
+def test_rejections_say_whether_a_retry_could_help(sql: str, fixable: bool) -> None:
+    with pytest.raises(UnsafeQueryError) as caught:
+        validate_sql(sql, allowed_tables=WITH_STAFF)
+    assert caught.value.fixable is fixable
+
+
+def test_rejections_are_not_fixable_by_default() -> None:
+    assert UnsafeQueryError("x").fixable is False

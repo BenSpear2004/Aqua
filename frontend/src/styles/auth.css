@@ -1,0 +1,39 @@
+.signin-panel { width: min(100%, 380px); margin: 24px auto 10px; padding: 0 16px; text-align: center; }
+.signin-panel h2 { margin: 0 0 10px; font-size: 17px; font-weight: 550; letter-spacing: -.02em; }
+.signin-panel p { margin: 0 0 16px; color: var(--color-muted); font-size: 13px; line-height: 1.6; }
+.google-signin-button { display: flex; justify-content: center; min-height: 44px; width: 100%; }
+.signin-panel .signin-panel__status { margin-top: 8px; font-size: 11px; }
+.signin-panel .signin-panel__error, .account-profile__error { color: #ffc2cb; }
+.signin-panel--dedicated { width: 100%; margin: 6px 0 0; padding: 0; }
+.signin-panel--dedicated h1 { margin: 0 0 14px; color: var(--color-text); font-size: clamp(23px, 2.6vw, 29px); font-weight: 550; letter-spacing: -.035em; line-height: 1.3; }
+.signin-panel--dedicated > p { margin-bottom: 24px; font-size: 14px; line-height: 1.7; }
+.signin-panel--dedicated .google-signin-button { margin: 0 auto; }
+.google-signin-button[hidden] { display: none; }
+.signin-panel--dedicated .signin-panel__error { margin: 18px 0 0; font-size: 12px; }
+.signin-panel--dedicated .auth-retry { margin-top: 12px; padding: 10px 18px; border: 1px solid rgba(208, 242, 248, .11); border-radius: 12px; background: rgba(157, 216, 232, .07); color: #d4eef7; }
+.signin-panel--dedicated .auth-retry:hover { background: rgba(174, 227, 240, .12); }
+.signin-panel__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.signin-panel .signin-panel__identity { margin-bottom: 12px; overflow-wrap: anywhere; font-size: 12px; }
+.signin-panel__identity strong { color: #d3e8f2; font-weight: 500; }
+.signin-panel__busy { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.signin-panel__spinner { width: 13px; height: 13px; flex: 0 0 13px; border: 1px solid rgba(178, 219, 237, .18); border-top-color: #a5dce8; border-radius: 50%; animation: signin-status-spin 900ms linear infinite; }
+@keyframes signin-status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .signin-panel__spinner { animation: none; } }
+.auth-retry { min-height: 44px; font-size: 13px; }
+.workspace-mode { position: absolute; z-index: var(--layer-content); top: 8px; right: 20px; color: var(--color-muted); font-size: 11px; }
+.account-profile { flex: 0 0 auto; min-width: 0; padding: 17px 10px 0; border-top: 1px solid rgba(181, 220, 234, .09); }
+.account-profile__identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.account-profile__identity > div { display: grid; gap: 4px; min-width: 0; }
+.account-profile__identity strong, .account-profile__identity span:not(.account-profile__avatar) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-profile__identity strong { font-size: 12px; font-weight: 550; }
+.account-profile__identity span:not(.account-profile__avatar) { color: var(--color-muted); font-size: 10px; }
+.account-profile__avatar { display: grid; flex: 0 0 32px; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: rgba(163, 225, 239, .12); color: #d4f3fa; font-size: 13px; }
+.account-profile > .text-action { min-height: 44px; margin: 5px 0 0 -9px; font-size: 12px; }
+.account-profile__error { margin: 10px 0 0; font-size: 11px; line-height: 1.5; }
+.sidebar-empty { margin: 0 12px; color: var(--color-muted); font-size: 11px; line-height: 1.5; }
+.query-sql { margin: 18px 0 4px; color: var(--color-muted); font-size: 11px; }
+.query-sql summary { cursor: pointer; padding: 7px 0; }
+.query-sql pre { max-width: 100%; margin: 5px 0; padding: 12px; overflow: auto; border-radius: 10px; background: rgba(0, 0, 0, .18); color: #d5edf4; font-size: 11px; white-space: pre; }
+@media (max-width: 600px) { .signin-panel { margin-top: 20px; padding: 0 10px; } .signin-panel h2 { font-size: 16px; } .signin-panel p { font-size: 12px; } .workspace-mode { top: 24px; right: 15px; } }
+@media (max-height: 650px) { .signin-panel { margin-top: 15px; } }
+.signin-page .signin-panel--dedicated { margin-top: 6px; padding: 0; }

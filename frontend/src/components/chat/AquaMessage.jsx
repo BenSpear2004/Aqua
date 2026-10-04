@@ -38,6 +38,7 @@ export default function AquaMessage({ message, hidden = false, onRetry }) {
         <div className="message__bubble message__bubble--aqua error-card">
           <span className="status-mark" aria-hidden="true">AQUA</span>
           <p>{response.error?.message || "AQUA couldn't complete that request. Please try again."}</p>
+          {response.sql && <details className="query-sql"><summary>View SQL</summary><pre><code>{response.sql}</code></pre></details>}
           {response.error?.retryable && (
             <button type="button" className="text-action" onClick={() => onRetry(message.id)}>
               Try again
@@ -55,6 +56,7 @@ export default function AquaMessage({ message, hidden = false, onRetry }) {
         <div className="markdown-response">
           <ReactMarkdown>{response.message || ""}</ReactMarkdown>
         </div>
+        {response.sql && <details className="query-sql"><summary>View SQL</summary><pre><code>{response.sql}</code></pre></details>}
         {(response.tables?.length > 0 || response.visualizations?.length > 0 || response.kpis?.length > 0) && (
           <div className="response-data">
             {response.tables?.map((table) => <FinancialTable key={table.id} table={table} />)}
