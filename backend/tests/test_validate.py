@@ -12,7 +12,7 @@ fail, then fix the validator.
 import pytest
 from sqlglot import exp
 
-from nl2sql.validate import UnsafeQueryError, validate_sql
+from nl2sql.validate import FORBIDDEN_FUNCTIONS, UnsafeQueryError, validate_sql
 
 # Queries the model could reasonably produce. All must pass.
 SAFE = [
@@ -81,3 +81,51 @@ def test_returns_tree_of_the_query() -> None:
     """Later stages rely on getting the parsed query back, not a bool."""
     tree = validate_sql("SELECT title FROM film")
     assert [t.name for t in tree.find_all(exp.Table)] == ["film"]
+
+
+# ---- dangerous functions ----
+
+# (dialect, sql, function name expected in the error)
+FORBIDDEN_FUNCTION_CASES = [
+    ("mysql", "SELECT SLEEP(5)", "SLEEP"),
+    ("mysql", "SELECT sleep(5)", "SLEEP"),  # any case
+    ("mysql", "SELECT `SLEEP`(5)", "SLEEP"),  # quoted name
+    ("mysql", "SELECT title FROM film WHERE SLEEP(1) = 0", "SLEEP"),  # hidden in WHERE
+    ("mysql", "SELECT BENCHMARK(1000000, MD5('a'))", "BENCHMARK"),
+    ("mysql", "SELECT LOAD_FILE('/etc/passwd')", "LOAD_FILE"),
+    ("postgres", "SELECT pg_sleep(5)", "PG_SLEEP"),
+    ("postgres", "SELECT pg_catalog.pg_sleep(5)", "PG_SLEEP"),  # schema prefix
+    ("postgres", 'SELECT "pg_sleep"(5)', "PG_SLEEP"),  # quoted name
+    ("postgres", "SELECT * FROM (SELECT pg_read_file('/etc/passwd')) t", "PG_READ_FILE"),
+    # Runs the SQL inside the string, which the parser only sees as text.
+    ("postgres", "SELECT query_to_xml('DELETE FROM film RETURNING *', true, false, '')", "QUERY_TO_XML"),
+]
+
+
+@pytest.mark.parametrize(("dialect", "sql", "name"), FORBIDDEN_FUNCTION_CASES)
+def test_dangerous_functions_are_rejected(dialect: str, sql: str, name: str) -> None:
+    with pytest.raises(UnsafeQueryError, match=f"forbidden function: {name}"):
+        validate_sql(sql, dialect=dialect)
+
+
+@pytest.mark.parametrize("name", sorted(FORBIDDEN_FUNCTIONS))
+def test_every_listed_function_is_actually_blocked(name: str) -> None:
+    """Guards against a list entry that never matches, e.g. a typo or a
+    function sqlglot starts parsing differently in a later version."""
+    with pytest.raises(UnsafeQueryError, match="forbidden function"):
+        validate_sql(f"SELECT {name}(1)", dialect="postgres")
+
+
+@pytest.mark.parametrize(
+    ("dialect", "sql"),
+    [
+        ("mysql", "SELECT UPPER(title), COUNT(*), AVG(length) FROM film GROUP BY title"),
+        ("mysql", "SELECT COUNT(*) FROM rental WHERE DATEDIFF(return_date, rental_date) > 7"),
+        ("mysql", "SELECT COUNT(*) FROM rental WHERE MONTH(rental_date) = 7"),
+        ("postgres", "SELECT LOWER(title), NOW(), COALESCE(description, '') FROM film"),
+        # The word only appears as text in a string, not as a call.
+        ("mysql", "SELECT title FROM film WHERE title = 'SLEEP(5)'"),
+    ],
+)
+def test_ordinary_functions_still_pass(dialect: str, sql: str) -> None:
+    assert isinstance(validate_sql(sql, dialect=dialect), exp.Query)

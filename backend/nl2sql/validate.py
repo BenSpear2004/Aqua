@@ -13,8 +13,8 @@ semicolon, and it wrongly rejects harmless queries such as
     SELECT title FROM film WHERE title = 'DROP ZONE'
 Parsing tells us what the statement *is*, not what words it contains.
 
-Checks statement type only. Table allowlists, column checks, LIMIT
-injection and blocking functions like SLEEP() are not done yet.
+Checks the statement type and blocks a list of dangerous functions.
+Table allowlists, column checks and LIMIT injection are not done yet.
 """
 
 from __future__ import annotations
@@ -64,6 +64,40 @@ FORBIDDEN_NODES: tuple[type[exp.Expression], ...] = (
     exp.TruncateTable,
 )
 
+# Functions that are dangerous even inside a read-only SELECT. Compared
+# lowercase. A read-only database account blocks most of the file and
+# admin ones anyway; this is the second layer, and it also catches the
+# slow-down ones, which need no special permission at all.
+FORBIDDEN_FUNCTIONS: frozenset[str] = frozenset(
+    {
+        # Stall the database on purpose (denial of service).
+        "sleep", "benchmark", "pg_sleep", "pg_sleep_for", "pg_sleep_until",
+        # Read files on the database server.
+        "load_file", "pg_read_file", "pg_read_binary_file", "pg_ls_dir",
+        "pg_stat_file", "lo_import", "lo_export",
+        # Reach other databases or run SQL passed in as a string, which
+        # could hide a write the parser never sees.
+        "dblink", "dblink_exec", "query_to_xml", "query_to_xml_and_xmlschema",
+        # Change server settings or end other people's sessions.
+        "set_config", "pg_reload_conf", "pg_terminate_backend",
+        "pg_cancel_backend",
+        # Hold locks that can block other users.
+        "get_lock", "pg_advisory_lock", "pg_advisory_xact_lock",
+    }
+)
+
+
+def _function_name(node: exp.Func) -> str:
+    """Return a function call's name in lowercase.
+
+    sqlglot parses functions it does not recognise, such as SLEEP or
+    pg_sleep, as exp.Anonymous with the name attached. Known functions
+    get their own classes, so ask those for their SQL name instead.
+    """
+    if isinstance(node, exp.Anonymous):
+        return node.name.lower()
+    return node.sql_name().lower()
+
 
 def validate_sql(sql: str, dialect: str = "mysql") -> exp.Query:
     """Return the parsed query if it is safe to run, otherwise raise.
@@ -107,6 +141,10 @@ def validate_sql(sql: str, dialect: str = "mysql") -> exp.Query:
         if isinstance(node, FORBIDDEN_NODES):
             raise UnsafeQueryError(
                 f"Query contains a forbidden operation: {node.key.upper()}."
+            )
+        if isinstance(node, exp.Func) and _function_name(node) in FORBIDDEN_FUNCTIONS:
+            raise UnsafeQueryError(
+                f"Query uses a forbidden function: {_function_name(node).upper()}."
             )
 
     return statement
