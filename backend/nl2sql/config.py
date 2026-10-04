@@ -15,9 +15,17 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
+
+# The repo-root .env, two folders up from this file (backend/nl2sql/).
+# Inside the Docker image this path does not exist, which is fine:
+# docker-compose passes the same values in as environment variables.
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
@@ -83,7 +91,10 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
 def load_settings() -> Settings:
     """Build Settings from the real environment.
 
-    In Docker, docker-compose loads .env into the environment. Running
-    locally, set the variables in your shell or rely on the defaults.
+    Reads the repo-root .env first, so local runs (pytest, python -m
+    nl2sql.db) see the same values docker-compose passes in. Variables
+    already set in the environment win over .env, so a shell or Docker
+    can still override any of them.
     """
+    load_dotenv(ENV_FILE, override=False)
     return settings_from(os.environ)

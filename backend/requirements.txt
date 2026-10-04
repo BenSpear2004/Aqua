@@ -5,3 +5,4 @@ sqlalchemy>=2,<3
 psycopg[binary]>=3.2,<4
 sqlglot>=30.18,<31
 pytest>=9,<10
+python-dotenv>=1,<2
