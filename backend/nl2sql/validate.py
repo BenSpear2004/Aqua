@@ -106,7 +106,16 @@ def _function_name(node: exp.Func) -> str:
 # column, and in places the database's users. The model gets the schema
 # in its prompt and never needs these, so they are always blocked.
 SYSTEM_SCHEMAS: frozenset[str] = frozenset(
-    {"information_schema", "pg_catalog", "pg_toast", "mysql", "performance_schema", "sys"}
+    {
+        # Postgres and MySQL catalogs.
+        "information_schema", "pg_catalog", "pg_toast",
+        "mysql", "performance_schema", "sys",
+        # TimescaleDB and its toolkit, installed on our Tiger Cloud
+        # database. Internal bookkeeping, never Pagila data.
+        "_timescaledb_cache", "_timescaledb_catalog", "_timescaledb_config",
+        "_timescaledb_functions", "_timescaledb_internal", "timescale_functions",
+        "timescaledb_experimental", "timescaledb_information", "toolkit_experimental",
+    }
 )
 
 
@@ -137,7 +146,7 @@ def _check_tables(statement: exp.Query, allowed: frozenset[str] | None) -> None:
 
 def validate_sql(
     sql: str,
-    dialect: str = "mysql",
+    dialect: str = "postgres",
     allowed_tables: Iterable[str] | None = None,
 ) -> exp.Query:
     """Return the parsed query if it is safe to run, otherwise raise.
@@ -146,8 +155,8 @@ def validate_sql(
     injection, column checks) can work on it without parsing the same
     string a second time.
 
-    `dialect` is a parameter because where Sakila will be hosted is not
-    decided yet, and MySQL and PostgreSQL parse some SQL differently.
+    `dialect` defaults to Postgres, which our Tiger Cloud database runs.
+    It stays a parameter because dialects parse some SQL differently.
 
     `allowed_tables`, if given, is the only tables the query may read.
     Left as None, any table is allowed except system catalogs.
