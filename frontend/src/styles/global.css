@@ -59,6 +59,7 @@ button:disabled { cursor: not-allowed; }
 .markdown-response pre code { padding: 0; background: transparent; }
 .response-data { display: grid; gap: 24px; margin-top: 26px; }
 .response-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+.answered-by { order: -1; margin-right: auto; color: var(--color-muted); font-size: 10px; letter-spacing: .03em; opacity: .75; }
 .text-action, .financial-table__actions button { min-height: 36px; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--color-muted); cursor: pointer; font-size: 11px; transition: color var(--duration-fast), background var(--duration-fast); }
 .text-action:hover, .financial-table__actions button:hover { background: rgba(162,214,236,.06); color: var(--color-aqua-bright); }
 .action-feedback { margin: 0; color: var(--color-muted); font-size: 11px; }

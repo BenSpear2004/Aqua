@@ -94,7 +94,7 @@ test("cancelling a question rejects with AbortError instead of showing an error"
 
 test("normalized responses always have every field the UI reads", () => {
   const partial = normalizeResponse({ status: "success", message: "Hi" });
-  assert.deepEqual(partial, { status: "success", sql: "", message: "Hi", tables: [], visualizations: [], kpis: [] });
+  assert.deepEqual(partial, { status: "success", sql: "", model: "", message: "Hi", tables: [], visualizations: [], kpis: [] });
   assert.equal(normalizeResponse(null).status, "error");
 });
 
@@ -107,4 +107,10 @@ test("models come from GET /api/models, server default first, and failures give 
 
   assert.deepEqual(await fetchModels(fakeFetch(jsonReply(500, null))), []);
   assert.deepEqual(await fetchModels(fakeFetch(new TypeError("offline"))), []);
+});
+
+test("the answering model is kept, so a fallback to Ollama is visible", async () => {
+  const { fetchImpl } = fakeFetch(jsonReply(200, { ...SUCCESS, model: "qwen3:8b" }));
+  const response = await queryApi({ prompt: "q", modelId: "gemini" }, { fetchImpl });
+  assert.equal(response.model, "qwen3:8b");
 });

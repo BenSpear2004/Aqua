@@ -104,6 +104,7 @@ export default function AquaMessage({ message, hidden = false, onRetry }) {
             {copyStatus === "Response copied" ? "Copied" : "Copy response"}
           </button>
           <span className="action-feedback" role="status" aria-live="polite">{copyStatus}</span>
+          {response.model && <span className="answered-by">Answered by {response.model}</span>}
         </div>
       </div>
     </article>

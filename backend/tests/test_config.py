@@ -121,3 +121,10 @@ def test_secrets_never_appear_when_printed() -> None:
     settings = settings_from({"GEMINI_API_KEY": "sk-secret", "INDEXER_DATABASE_URL": "postgresql://i:pw2@h/db"})
     assert "sk-secret" not in repr(settings)
     assert "pw2" not in repr(settings)
+
+
+def test_fallback_is_on_unless_switched_off() -> None:
+    assert settings_from({}).llm_fallback is True
+    assert settings_from({"LLM_FALLBACK": "off"}).llm_fallback is False
+    with pytest.raises(ConfigError, match="LLM_FALLBACK"):
+        settings_from({"LLM_FALLBACK": "maybe"})

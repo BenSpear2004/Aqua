@@ -123,3 +123,11 @@ One baseline question (t47) was first lost to a DNS failure reaching the databas
 **Alternatives.** Keep `npm run dev` in production; Caddy instead of nginx; publish the backend port directly.
 
 **Reasoning.** The Vite dev server is not built for public traffic and rebuilds in memory on every start. Serving on 5173 means whatever routes aqua-ai.us to the server needs no change; HTTPS stays in front of nginx. Each question costs 20 to 80 seconds of model time, so without a limit one visitor could tie up the free Gemma quota or Ben's machine. With Cloudflare in front, nginx keys the limit on `CF-Connecting-IP`. Binding the backend to localhost closes the path around the rate limit. Commands on the server itself (`curl localhost:8000`, the eval) still work.
+
+## October 2026: Retry Gemini server errors, then fall back to Ollama
+
+**Decision.** Each Gemini call gets three attempts with a short backoff (about 2 then 4 seconds), for HTTP 500, 502, 503 and 504 only. If Gemini still fails with one of those, a 429 (spent quota) or a timeout, and `LLM_FALLBACK` is on (the default), `llm.complete()` sends the same prompt to Ollama. Bad keys and model names (400, 403, 404) never fall back. Every response now carries `model`, the model that actually answered, and the UI shows it as "Answered by". `run_eval.py` turns the fallback off unless `--fallback` is given.
+
+**Alternatives.** Only more retries; only the fallback; switch the default back to Ollama; a paid Gemini key.
+
+**Reasoning.** In the first full Gemma run, 14 of 50 questions (28%) failed on Google's side: 12 HTTP 500 and 2 HTTP 503, even with two quick attempts. The 36 questions Gemma did answer were all correct, so the problem is availability, not quality. More retries help with brief errors; the fallback covers long outages and a spent daily quota, which retries cannot. Retrying a 429 would only spend more quota, so it goes straight to the fallback. Configuration mistakes stay loud so they get fixed instead of silently running on Ollama. Showing the answering model keeps the fallback honest, and keeping it out of the eval by default means the scores still measure the model being evaluated.

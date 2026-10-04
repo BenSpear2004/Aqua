@@ -7,7 +7,7 @@ from decimal import Decimal
 from nl2sql.pipeline import Answer
 from nl2sql.response import outage_response, to_response
 
-TOP_KEYS = {"status", "sql", "message", "tables", "visualizations", "kpis", "error"}
+TOP_KEYS = {"status", "sql", "model", "message", "tables", "visualizations", "kpis", "error"}
 
 
 def answer(columns, rows, **extra) -> Answer:
@@ -142,3 +142,12 @@ def test_outage_body_is_retryable() -> None:
     assert set(body) == TOP_KEYS
     assert body["status"] == "error"
     assert body["error"] == {"code": "model_unavailable", "message": "Cannot connect to Ollama.", "retryable": True}
+
+
+def test_the_answering_model_is_reported() -> None:
+    """After a fallback the model differs from the one requested; the UI
+    shows which one answered."""
+    assert to_response(answer(["n"], [(1,)], model="qwen3:8b"))["model"] == "qwen3:8b"
+    rejected = Answer(question="q", sql="DELETE FROM film", error="x", error_code="rejected", model="gemma-4-31b-it")
+    assert to_response(rejected)["model"] == "gemma-4-31b-it"
+    assert outage_response("model_unavailable", "down")["model"] == ""
