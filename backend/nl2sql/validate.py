@@ -13,12 +13,15 @@ semicolon, and it wrongly rejects harmless queries such as
     SELECT title FROM film WHERE title = 'DROP ZONE'
 Parsing tells us what the statement *is*, not what words it contains.
 
-Checks the statement type and blocks a list of dangerous functions.
+Checks the statement type, blocks dangerous functions and system
+catalogs, and can restrict queries to a list of allowed tables.
 limit_rows() then caps how many rows a validated query can return.
-Table allowlists and column checks are not done yet.
+Column checks are not done yet.
 """
 
 from __future__ import annotations
+
+from collections.abc import Iterable
 
 import sqlglot
 from sqlglot import exp
@@ -99,8 +102,44 @@ def _function_name(node: exp.Func) -> str:
         return node.name.lower()
     return node.sql_name().lower()
 
+# Built-in schemas that describe the database itself: every table, every
+# column, and in places the database's users. The model gets the schema
+# in its prompt and never needs these, so they are always blocked.
+SYSTEM_SCHEMAS: frozenset[str] = frozenset(
+    {"information_schema", "pg_catalog", "pg_toast", "mysql", "performance_schema", "sys"}
+)
 
-def validate_sql(sql: str, dialect: str = "mysql") -> exp.Query:
+
+def _check_tables(statement: exp.Query, allowed: frozenset[str] | None) -> None:
+    """Raise if the query reads a system catalog or a table not allowed.
+
+    Names are compared lowercase, and schema prefixes are ignored for the
+    allowlist, so film, public.film and sakila.film all count as film.
+    """
+    # Names defined by WITH inside this query. They look like tables but
+    # are temporary results, and they can never have a schema prefix.
+    cte_names = {cte.alias.lower() for cte in statement.find_all(exp.CTE)}
+
+    for table in statement.find_all(exp.Table):
+        name = table.name.lower()
+        if not name:
+            continue  # a table function like generate_series(); see FORBIDDEN_FUNCTIONS
+        schemas = {table.db.lower(), table.catalog.lower()} - {""}
+        if schemas & SYSTEM_SCHEMAS or (not schemas and name.startswith("pg_")):
+            # Postgres finds pg_catalog tables like pg_user even without
+            # the prefix, so unprefixed pg_ names are system tables too.
+            raise UnsafeQueryError(f"Query reads a system catalog: {table.sql()}.")
+        if not schemas and name in cte_names:
+            continue
+        if allowed is not None and name not in allowed:
+            raise UnsafeQueryError(f"Query uses a table that is not allowed: {name}.")
+
+
+def validate_sql(
+    sql: str,
+    dialect: str = "mysql",
+    allowed_tables: Iterable[str] | None = None,
+) -> exp.Query:
     """Return the parsed query if it is safe to run, otherwise raise.
 
     Returns the syntax tree rather than True so later checks (LIMIT
@@ -109,6 +148,9 @@ def validate_sql(sql: str, dialect: str = "mysql") -> exp.Query:
 
     `dialect` is a parameter because where Sakila will be hosted is not
     decided yet, and MySQL and PostgreSQL parse some SQL differently.
+
+    `allowed_tables`, if given, is the only tables the query may read.
+    Left as None, any table is allowed except system catalogs.
     """
     try:
         statements = sqlglot.parse(sql, read=dialect)
@@ -147,6 +189,9 @@ def validate_sql(sql: str, dialect: str = "mysql") -> exp.Query:
             raise UnsafeQueryError(
                 f"Query uses a forbidden function: {_function_name(node).upper()}."
             )
+
+    allowed = None if allowed_tables is None else frozenset(t.lower() for t in allowed_tables)
+    _check_tables(statement, allowed)
 
     return statement
 

@@ -202,3 +202,72 @@ def test_original_query_is_not_changed() -> None:
     tree = validate_sql("SELECT title FROM film LIMIT 5000")
     limit_rows(tree)
     assert tree.sql() == "SELECT title FROM film LIMIT 5000"
+
+
+# ---- system catalogs and allowed tables ----
+
+ALLOWED = ["film", "actor", "film_actor", "inventory"]
+
+
+@pytest.mark.parametrize(
+    ("dialect", "sql"),
+    [
+        ("mysql", "SELECT table_name FROM information_schema.tables"),
+        ("mysql", "SELECT * FROM mysql.user"),
+        ("mysql", "SELECT * FROM performance_schema.threads"),
+        ("postgres", "SELECT * FROM pg_catalog.pg_tables"),
+        # Postgres finds pg_catalog tables without the prefix.
+        ("postgres", "SELECT usename FROM pg_user"),
+        ("postgres", "SELECT * FROM film WHERE film_id IN (SELECT 1 FROM pg_roles)"),
+    ],
+)
+def test_system_catalogs_are_always_blocked(dialect: str, sql: str) -> None:
+    with pytest.raises(UnsafeQueryError, match="system catalog"):
+        validate_sql(sql, dialect=dialect)
+
+
+@pytest.mark.parametrize(
+    ("dialect", "sql"),
+    [
+        ("mysql", "SELECT * FROM film"),
+        ("mysql", "SELECT * FROM sakila.FILM"),  # schema prefix and case ignored
+        ("postgres", "SELECT * FROM public.film"),
+        ("mysql", "SELECT a.first_name FROM actor a JOIN film_actor fa ON a.actor_id = fa.actor_id"),
+        # A CTE name is not a table, so it does not need to be on the list.
+        ("mysql", "WITH top AS (SELECT * FROM film) SELECT * FROM top"),
+    ],
+)
+def test_allowed_tables_pass(dialect: str, sql: str) -> None:
+    assert isinstance(validate_sql(sql, dialect=dialect, allowed_tables=ALLOWED), exp.Query)
+
+
+@pytest.mark.parametrize(
+    ("sql", "table"),
+    [
+        ("SELECT * FROM customer", "customer"),
+        ("SELECT * FROM film WHERE film_id IN (SELECT film_id FROM payment)", "payment"),
+        ("SELECT * FROM film JOIN rental ON 1 = 1", "rental"),
+        # Naming a CTE after an allowed table does not hide what it reads.
+        ("WITH film AS (SELECT * FROM customer) SELECT * FROM film", "customer"),
+    ],
+)
+def test_tables_not_on_the_list_are_rejected(sql: str, table: str) -> None:
+    with pytest.raises(UnsafeQueryError, match=f"not allowed: {table}"):
+        validate_sql(sql, allowed_tables=ALLOWED)
+
+
+def test_no_allowlist_means_any_ordinary_table() -> None:
+    assert isinstance(validate_sql("SELECT * FROM customer"), exp.Query)
+
+
+def test_empty_allowlist_allows_nothing() -> None:
+    """An empty list is not the same as no list."""
+    with pytest.raises(UnsafeQueryError, match="not allowed: film"):
+        validate_sql("SELECT * FROM film", allowed_tables=[])
+
+
+def test_table_functions_are_not_treated_as_tables() -> None:
+    assert isinstance(
+        validate_sql("SELECT * FROM generate_series(1, 3)", dialect="postgres", allowed_tables=ALLOWED),
+        exp.Query,
+    )
