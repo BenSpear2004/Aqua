@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nl2sql.config import load_settings
 from nl2sql.db import DatabaseError
+from nl2sql.display import display_for
 from nl2sql.llm import LLMError
 from nl2sql.pipeline import Retriever, answer_question
 from nl2sql.response import outage_response, to_response
@@ -136,4 +137,4 @@ def query(request: QueryRequest):
                 "database_unavailable", "The database is not reachable right now."
             ),
         )
-    return to_response(answer)
+    return to_response(answer, display_for(schema))

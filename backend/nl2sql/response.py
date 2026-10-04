@@ -13,16 +13,22 @@ date with a measure a line chart, and anything else just the table.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
+from nl2sql.display import Display
 from nl2sql.pipeline import Answer
 from nl2sql.summarize import summarize
 from nl2sql.visualize import suggest_chart
 
 # Column-name words that suggest money. A guess from the name only; the
-# frontend shows these as dollars instead of plain numbers.
-CURRENCY_WORDS = ("amount", "revenue", "spent", "payment", "price", "cost", "rate", "sales")
+# frontend formats these in the currency the response names (dollars
+# when none is given).
+CURRENCY_WORDS = (
+    "amount", "revenue", "spent", "payment", "price", "cost", "rate", "sales",
+    "balance", "salary",
+)
 
 
 def _json_value(value: Any) -> Any:
@@ -81,6 +87,8 @@ def _chart(answer: Answer, keys: list[str], columns: list[dict[str, Any]]) -> tu
             "value": _json_value(answer.rows[0][answer.columns.index(chart.y)]),
             "type": column["type"],
         }
+        if column.get("currency"):
+            kpi["currency"] = column["currency"]
         return [{"id": "answer-kpi", "type": "kpi", "title": answer.question}], [kpi]
     if chart.type in ("bar", "line") and chart.x and chart.y is not None:
         visualization = {
@@ -95,8 +103,13 @@ def _chart(answer: Answer, keys: list[str], columns: list[dict[str, Any]]) -> tu
     return [], []
 
 
-def to_response(answer: Answer) -> dict[str, Any]:
-    """Build the JSON reply for one answered (or rejected) question."""
+def to_response(answer: Answer, display: Display | None = None) -> dict[str, Any]:
+    """Build the JSON reply for one answered (or rejected) question.
+
+    `display` comes from display.display_for(schema). Values are
+    translated first, so the table, the chart and the summary all show
+    "Debit (money out)" rather than VYDAJ.
+    """
     if answer.error is not None:
         return {
             "status": "error",
@@ -109,12 +122,23 @@ def to_response(answer: Answer) -> dict[str, Any]:
             "error": {"code": answer.error_code, "message": answer.error, "retryable": False},
         }
 
+    display = display or Display()
+    answer = replace(answer, rows=display.rows(answer.columns, answer.rows))
     keys = _unique_keys(answer.columns)
     columns = []
     for i, key in enumerate(keys):
-        column = {"key": key, "label": _label(key), "type": _column_type(key, [row[i] for row in answer.rows])}
+        name = answer.columns[i]
+        label = display.column_labels.get(name.lower(), _label(key))
+        column = {
+            "key": key,
+            "label": label,
+            # The header counts too: a11 says nothing, "Average salary" does.
+            "type": _column_type(f"{key} {label}", [row[i] for row in answer.rows]),
+        }
         if column["type"] == "currency":
-            column["fractionDigits"] = 2  # cents; the frontend defaults to whole dollars
+            column["fractionDigits"] = 2  # cents; the frontend defaults to whole units
+            if display.currency:
+                column["currency"] = display.currency
         columns.append(column)
     rows = [{key: _json_value(row[i]) for i, key in enumerate(keys)} for row in answer.rows]
     visualizations, kpis = _chart(answer, keys, columns)
