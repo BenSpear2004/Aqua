@@ -189,3 +189,61 @@ def test_real_schema_never_lists_personal_values(pagila: Schema) -> None:
 @needs_db
 def test_real_payment_joins_by_column_names(pagila: Schema) -> None:
     assert pagila.related(["payment"]) >= {"customer", "rental", "staff"}
+
+
+# ---- comments ----
+
+
+def test_prompt_shows_table_and_column_comments() -> None:
+    """The bank's codes (PRIJEM, loan status B) mean nothing to the model
+    without the database comments that explain them."""
+    loan = Table(
+        name="loan",
+        columns=(
+            Column("duration", "integer", True, comment="Loan length in months."),
+            Column("status", "text", True, values=("A", "B"), comment="A = paid off; B = not paid."),
+            Column("amount", "integer", True),
+        ),
+        constraints=("PRIMARY KEY (loan_id)",),
+        references=frozenset(),
+        comment="Loans granted to accounts.",
+    )
+    prompt = Schema(tables={"loan": loan}).to_prompt()
+
+    assert prompt.startswith("-- Loans granted to accounts.\nCREATE TABLE loan (")
+    assert "  duration integer NOT NULL,  -- Loan length in months." in prompt
+    assert "  status text NOT NULL,  -- A = paid off; B = not paid. Values: A, B" in prompt
+    assert "  amount integer NOT NULL,\n" in prompt  # no comment, no marker
+
+
+def test_tables_without_comments_look_as_before() -> None:
+    assert not SCHEMA.to_prompt().startswith("--")
+    assert "-- values: " in SCHEMA.to_prompt()
+
+
+def test_comments_are_kept_on_one_line() -> None:
+    from nl2sql.schema import _one_line
+
+    assert _one_line("Line one.\n  Line two.") == "Line one. Line two."
+    assert _one_line(None) == ""
+
+
+def test_reserved_table_names_are_quoted_in_the_prompt() -> None:
+    """order is a reserved word: FROM order is a syntax error."""
+    order = Table(
+        name="order",
+        columns=(Column("order_id", "integer", True),),
+        constraints=(),
+        references=frozenset(),
+        quoted_name='"order"',
+    )
+    assert 'CREATE TABLE "order" (' in Schema(tables={"order": order}).to_prompt()
+    assert Schema(tables={"order": order}).allowed_tables == frozenset({"order"})
+
+
+def test_blank_values_are_shown_quoted() -> None:
+    from nl2sql.schema import _display_value
+
+    assert _display_value(" ") == "' '"
+    assert _display_value("") == "''"
+    assert _display_value("English             ") == "English"  # padding still trimmed
