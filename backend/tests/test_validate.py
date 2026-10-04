@@ -12,7 +12,13 @@ fail, then fix the validator.
 import pytest
 from sqlglot import exp
 
-from nl2sql.validate import FORBIDDEN_FUNCTIONS, UnsafeQueryError, validate_sql
+from nl2sql.validate import (
+    DEFAULT_MAX_ROWS,
+    FORBIDDEN_FUNCTIONS,
+    UnsafeQueryError,
+    limit_rows,
+    validate_sql,
+)
 
 # Queries the model could reasonably produce. All must pass.
 SAFE = [
@@ -129,3 +135,70 @@ def test_every_listed_function_is_actually_blocked(name: str) -> None:
 )
 def test_ordinary_functions_still_pass(dialect: str, sql: str) -> None:
     assert isinstance(validate_sql(sql, dialect=dialect), exp.Query)
+
+
+# ---- row limit ----
+
+
+def limited(sql: str, dialect: str = "mysql", max_rows: int = 1000) -> str:
+    """Validate, apply the row limit, and return the SQL that would run."""
+    return limit_rows(validate_sql(sql, dialect=dialect), max_rows).sql(dialect=dialect)
+
+
+@pytest.mark.parametrize(
+    ("dialect", "sql", "expected"),
+    [
+        ("mysql", "SELECT title FROM film", "SELECT title FROM film LIMIT 1000"),
+        ("mysql", "SELECT title FROM film LIMIT 5", "SELECT title FROM film LIMIT 5"),
+        ("mysql", "SELECT title FROM film LIMIT 5000", "SELECT title FROM film LIMIT 1000"),
+        (
+            "mysql",
+            "SELECT title FROM film ORDER BY title LIMIT 5000",
+            "SELECT title FROM film ORDER BY title LIMIT 1000",
+        ),
+        # MySQL's "LIMIT offset, count" keeps its meaning.
+        ("mysql", "SELECT title FROM film LIMIT 10, 5", "SELECT title FROM film LIMIT 5 OFFSET 10"),
+        (
+            "mysql",
+            "SELECT title FROM film LIMIT 5000 OFFSET 20",
+            "SELECT title FROM film LIMIT 1000 OFFSET 20",
+        ),
+        ("mysql", "SELECT 1 UNION SELECT 2", "SELECT 1 UNION SELECT 2 LIMIT 1000"),
+        # The inner limit is left alone; only the outer query is capped.
+        (
+            "mysql",
+            "SELECT * FROM (SELECT title FROM film LIMIT 2000) AS t",
+            "SELECT * FROM (SELECT title FROM film LIMIT 2000) AS t LIMIT 1000",
+        ),
+        (
+            "postgres",
+            "SELECT title FROM film FETCH FIRST 5000 ROWS ONLY",
+            "SELECT title FROM film LIMIT 1000",
+        ),
+        ("postgres", "SELECT title FROM film FETCH FIRST 3 ROWS ONLY", "SELECT title FROM film LIMIT 3"),
+        ("postgres", "SELECT title FROM film LIMIT ALL", "SELECT title FROM film LIMIT 1000"),
+    ],
+)
+def test_row_limit(dialect: str, sql: str, expected: str) -> None:
+    assert limited(sql, dialect=dialect) == expected
+
+
+def test_custom_max_rows() -> None:
+    assert limited("SELECT title FROM film", max_rows=50) == "SELECT title FROM film LIMIT 50"
+
+
+def test_default_max_rows_is_used() -> None:
+    tree = limit_rows(validate_sql("SELECT title FROM film"))
+    assert tree.sql() == f"SELECT title FROM film LIMIT {DEFAULT_MAX_ROWS}"
+
+
+def test_expression_limit_is_rejected() -> None:
+    with pytest.raises(UnsafeQueryError, match="whole number"):
+        limited("SELECT title FROM film LIMIT 1+1", dialect="postgres")
+
+
+def test_original_query_is_not_changed() -> None:
+    """The caller may still want to log exactly what the model wrote."""
+    tree = validate_sql("SELECT title FROM film LIMIT 5000")
+    limit_rows(tree)
+    assert tree.sql() == "SELECT title FROM film LIMIT 5000"
