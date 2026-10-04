@@ -131,3 +131,26 @@ One baseline question (t47) was first lost to a DNS failure reaching the databas
 **Alternatives.** Only more retries; only the fallback; switch the default back to Ollama; a paid Gemini key.
 
 **Reasoning.** In the first full Gemma run, 14 of 50 questions (28%) failed on Google's side: 12 HTTP 500 and 2 HTTP 503, even with two quick attempts. The 36 questions Gemma did answer were all correct, so the problem is availability, not quality. More retries help with brief errors; the fallback covers long outages and a spent daily quota, which retries cannot. Retrying a 429 would only spend more quota, so it goes straight to the fallback. Configuration mistakes stay loud so they get fixed instead of silently running on Ollama. Showing the answering model keeps the fallback honest, and keeping it out of the eval by default means the scores still measure the model being evaluated.
+
+## October 2026: Gemma 4 through the Gemini API as the default model
+
+**Decision.** Generate SQL with `gemma-4-31b-it` on the Gemini API free tier (`LLM_PROVIDER=gemini`). Ollama (`qwen3`) on Ben's machine becomes the backup and the automatic fallback. Keep `RETRIEVAL=on`.
+
+**Results.** `pagila_v1.jsonl`, 50 test questions, October 4, 2026, on a local copy of production (Pagila v3.1.0, same roles). Fallback off, so every Gemma number is Gemma alone. Questions lost to Google's HTTP 500 and 503 errors were rerun once with the three-attempt retry; "Outages left" are those that failed again.
+
+| | qwen3:4b baseline | qwen3:4b retrieval | Gemma 4 baseline | Gemma 4 retrieval |
+|---|---|---|---|---|
+| Exact | 43/50 | 45/50 | 48/50 | 45/50 |
+| Lenient | 48/50 | 49/50 | 49/50 | 48/50 |
+| Wrong answers (SQL ran, result wrong) | 2 | 1 | 0 | 0 |
+| Outages left | 0 | 0 | 1 | 2 |
+| Hard questions, lenient | 14/15 | 14/15 | 15/15 | 13/15 (both misses are outages) |
+| Median seconds | 26.7 | 20.0 | 40.9 | 47.9 |
+
+In the first full Gemma runs, 14 of 50 questions in each mode failed on Google's side (28%) with the old two-attempt setting. In the reruns with three attempts, 3 of 28 failed again (11%); the runs were at different times, so this is not a controlled comparison.
+
+**Alternatives.** Keep `qwen3:4b` or `qwen3:8b` on Ollama as the default; a Gemini Flash model (about 20 free requests a day); a paid key.
+
+**Reasoning.** Gemma answered every question it reached correctly in both modes, including t37, the duplicate-name trap `qwen3:4b` failed with retrieval, and t24 and t40, which `qwen3:4b` failed without it. It is free and needs no team hardware. Its weaknesses are availability and speed: about 40 to 50 seconds per question, and Google's free tier fails often enough that the retry and Ollama fallback (entry above) are required, not optional.
+
+Retrieval made no measurable difference to Gemma on this set: both modes got every answered question right, so the set is too easy to separate them (a ceiling). Retrieval added more exact-only misses (t38, t41, t46), where Gemma followed the examples in adding a count or total column; lenient scoring accepts those. It stays on because it helped `qwen3:4b`, which is now the fallback, and because it keeps prompts short. Separating the two for Gemma needs the harder question set listed under open items in `CLAUDE.md`.
