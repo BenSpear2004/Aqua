@@ -37,7 +37,7 @@ The server runs the app with docker-compose. Code changes are made locally, push
 | Frontend | React 19 with Vite. Production: a static build served by nginx on port 5173, which forwards `/api` to the backend and rate-limits questions. Development: `npm run dev`, whose proxy does the same |
 | Database | PostgreSQL on Tiger Cloud free service (TimescaleDB, pgvector, pgvectorscale) |
 | Sample data | Pagila (Postgres port of Sakila) |
-| LLM | Gemini API with the free `gemini-3.5-flash-lite` by default (`LLM_PROVIDER=gemini`), then `gemma-4-26b-a4b-it`, then Ollama (`qwen3`) on Ben's server over Tailscale when a model is out of quota or down. Model names read from env |
+| LLM | Gemini API with the free `gemini-3.5-flash-lite` by default (`LLM_PROVIDER=gemini`). When it is out of quota or down: Ollama (`qwen3`) on Ben's server over Tailscale, then `gemma-4-26b-a4b-it`. Model names read from env |
 | Embeddings | `gemini-embedding-2` at 768 dimensions, stored in pgvector in the `retrieval` schema (Phase 4) |
 | SQL parsing and validation | `sqlglot`, Postgres dialect |
 | DB driver | `psycopg` 3 |
@@ -51,13 +51,13 @@ Gemini cannot be fine-tuned through the free API, which is why fine-tuning targe
 
 ### Model choice
 
-No model name is hardcoded. `LLM_PROVIDER` picks the server default (`gemini` or `ollama`), and `GEMINI_MODEL`, `OLLAMA_MODEL` and `GEMINI_EMBED_MODEL` come from `.env`, so switching models is a config change, not a code change. The default is `gemini-3.5-flash-lite` through the Gemini API: free, about one second per answer, and the most accurate model in our eval (`docs/decisions.md`). `GEMINI_FALLBACK_MODELS` (default `gemma-4-26b-a4b-it`, free with its own quota) is tried next when it is out of quota or down, then Ollama. Gemma 4 thinks before answering, which costs 15 to 90 seconds, so it is the fallback, not the default. Ollama stays for the fine-tuned model later. The UI can pick either per question (`GET /api/models`). Keep every model out of pytest. Record each model change and its eval result in `docs/decisions.md`.
+No model name is hardcoded. `LLM_PROVIDER` picks the server default (`gemini` or `ollama`), and `GEMINI_MODEL`, `OLLAMA_MODEL` and `GEMINI_EMBED_MODEL` come from `.env`, so switching models is a config change, not a code change. The default is `gemini-3.5-flash-lite` through the Gemini API: free, about one second per answer, and the most accurate model in our eval (`docs/decisions.md`). When it is out of quota or down, the question goes to Ollama, then to `GEMINI_FALLBACK_MODELS` (default `gemma-4-26b-a4b-it`, free with its own quota). Gemma 4 thinks before answering, which costs 15 to 90 seconds, so it is the fallback, not the default. Ollama stays for the fine-tuned model later. The UI can pick either per question (`GET /api/models`). Keep every model out of pytest. Record each model change and its eval result in `docs/decisions.md`.
 
 ### Providers
 
 Both providers sit behind the same `complete()` call in `nl2sql/llm.py`, so the rest of the pipeline does not change when the provider does.
 
-- Gemini API: Gemini models get the rules as a system instruction and a JSON schema for `{"sql": ...}`. Gemma models take neither, so for them the rules go at the top of the prompt and `generate.extract_sql` reads the SQL from the code fence Gemma writes. Each call gets three attempts with a short backoff, for server errors only (429 is not retried: it would spend more quota). If a model still fails with an outage, a spent quota or a timeout, and `LLM_FALLBACK` is on (the default), `complete()` tries each of `GEMINI_FALLBACK_MODELS` in order, then Ollama. Bad keys and model names (400, 403, 404) never fall back, so configuration mistakes stay visible. The answer reports the model that actually answered.
+- Gemini API: Gemini models get the rules as a system instruction and a JSON schema for `{"sql": ...}`. Gemma models take neither, so for them the rules go at the top of the prompt and `generate.extract_sql` reads the SQL from the code fence Gemma writes. Each call gets three attempts with a short backoff, for server errors only (429 is not retried: it would spend more quota). If a model still fails with an outage, a spent quota or a timeout, and `LLM_FALLBACK` is on (the default), `complete()` follows `llm.fallback_chain()`: Gemini Flash-Lite, then Ollama, then each of `GEMINI_FALLBACK_MODELS` (when Ollama is chosen, Ollama first, then the Gemini models). Any Ollama failure moves on, because Ben's machine may simply be off. An empty Gemini reply (a safety or recitation stop) also moves on. Bad keys and model names (400, 403, 404) never fall back, so configuration mistakes stay visible. The answer reports the model that actually answered.
 - Ollama: called with a JSON schema, Qwen's recommended sampling, a fixed seed and a 16k context. `OLLAMA_THINK` turns reasoning on or off; on was more accurate in testing.
 
 ## Repository layout
@@ -153,7 +153,7 @@ nginx answers 429 when one visitor sends more than 10 questions a minute (burst 
 
 1. Receive a question.
 2. Build context: every table from `schema.py`, or with `RETRIEVAL=on` the nearest tables plus similar verified examples. If retrieval fails, fall back to every table.
-3. Ask the model (Gemini Flash-Lite by default; Gemma 4 26B, then Ollama, when it is out of quota or down) for one SQL statement. With `ANSWER_SIZE_RULES=on`, `answer_size.py` adds one line saying how many rows the question wants: the number it gives, the top 10 for a plural with no number, first place and every tie for a singular, the same within each group for "in each", and no limit for "all".
+3. Ask the model (Gemini Flash-Lite by default; Ollama, then Gemma 4 26B, when it is out of quota or down) for one SQL statement. With `ANSWER_SIZE_RULES=on`, `answer_size.py` adds one line saying how many rows the question wants: the number it gives, the top 10 for a plural with no number, first place and every tie for a singular, the same within each group for "in each", and no limit for "all".
 4. Validate the SQL with `validate.py` against the schema's allowlist. On failure, never execute.
 5. Execute in a read-only transaction with a row limit and timeout.
 6. If step 4 or 5 failed and the error is fixable (`UnsafeQueryError.fixable`, or a database error other than a timeout), ask the model once more with the failed SQL and the error. Writes, dangerous functions and catalog access are never retried.

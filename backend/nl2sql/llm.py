@@ -100,29 +100,65 @@ def complete(
     for the Gemini SDK client. Normal callers leave it out.
 
     The returned Completion's `model` names the model that actually
-    answered, so a fallback to Ollama is visible to the caller.
+    answered, so a fallback is visible to the caller.
     """
-    if settings.llm_provider != "gemini":
-        return _complete_ollama(prompt, settings, system, json_schema, client)
-    models = [settings.gemini_model]
-    if settings.llm_fallback:
-        models += [m for m in settings.gemini_fallback_models if m not in models]
-    for model in models:
+    chain = fallback_chain(settings)
+    last_error: LLMError | None = None
+    for index, (provider, model) in enumerate(chain):
+        # A test client is a stand-in for the first provider (an httpx client
+        # for Ollama, an SDK stand-in for Gemini), so it serves that provider.
+        step_client = client if provider == chain[0][0] else None
         try:
+            if provider == "ollama":
+                # Ollama gets the system rules and JSON schema Gemma cannot.
+                return _complete_ollama(
+                    prompt, settings, system, json_schema, step_client
+                )
             return _complete_gemini(
                 prompt,
                 replace(settings, gemini_model=model),
                 system,
                 json_schema,
-                client,
+                step_client,
             )
         except LLMError as exc:
-            if not (settings.llm_fallback and exc.transient):
+            last_error = exc
+            # A Gemini configuration mistake (bad key or model name) stops
+            # the chain so it gets fixed. Ollama on Ben's machine is often
+            # simply off, so any Ollama failure moves on.
+            if provider == "gemini" and not exc.transient:
                 raise
-            log.warning("Gemini model %s unavailable, trying the next: %s", model, exc)
-    log.warning("No Gemini model answered; answering with Ollama instead.")
-    # Ollama gets the system instruction and JSON schema Gemma could not use.
-    return _complete_ollama(prompt, settings, system, json_schema, None)
+            if index + 1 < len(chain):
+                log.warning(
+                    "%s unavailable, trying the next model: %s", model or provider, exc
+                )
+    assert last_error is not None
+    raise last_error
+
+
+def fallback_chain(settings: Settings) -> list[tuple[str, str | None]]:
+    """(provider, Gemini model) pairs, in the order to try them.
+
+    Gemini (the default): the main Gemini model, then Ollama, then each of
+    gemini_fallback_models. Ollama: Ollama first, then the Gemini models.
+    With llm_fallback off, only the first step. Gemini steps after the
+    first need an API key.
+    """
+    gemini = [settings.gemini_model] + [
+        m for m in settings.gemini_fallback_models if m != settings.gemini_model
+    ]
+    if settings.llm_provider == "gemini":
+        steps = [("gemini", gemini[0]), ("ollama", None)]
+        steps += [("gemini", model) for model in gemini[1:]]
+    else:
+        steps = [("ollama", None)] + [("gemini", model) for model in gemini]
+    if not settings.llm_fallback:
+        return steps[:1]
+    return [
+        step
+        for index, step in enumerate(steps)
+        if index == 0 or step[0] == "ollama" or settings.gemini_api_key
+    ]
 
 
 def _complete_ollama(
@@ -257,7 +293,11 @@ def _complete_gemini(
     if not text:
         candidates = getattr(response, "candidates", None) or []
         reason = candidates[0].finish_reason if candidates else "blocked or empty"
-        raise LLMError(f"Gemini returned no answer (stop reason: {reason}).")
+        # An empty reply (a safety or recitation stop) may not repeat on
+        # another model, so let the chain move on.
+        raise LLMError(
+            f"Gemini returned no answer (stop reason: {reason}).", transient=True
+        )
     return Completion(
         text=text,
         thinking="",

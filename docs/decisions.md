@@ -169,3 +169,24 @@ Retrieval made no measurable difference to Gemma on this set: both modes got eve
 **Alternatives.** Keep the login controls inside the chat screen; introduce a routing dependency for these two views.
 
 **Reasoning.** The user requested a separate sign-in page with Aqua's existing visuals. The auth hook remains mounted across sign-in/workspace transitions, while logout, access failure, and account changes clear private workspace state and abort its queries. This needs no new dependencies or account database. At the user's request, public `/privacy` and `/terms` pages are linked from sign-in, use their supplied AQUA/Benjamin contact details, and describe the current implementation. These pages do not mount authentication, so policy access does not depend on Google or the backend. The owner should review the documents against production practices before publishing.
+
+## October 2026: Gemini Flash-Lite as the default, then Ollama, then Gemma
+
+**Decision.** Generate SQL with `gemini-3.5-flash-lite`. When it is out of quota, down, slow or returns an empty reply, try Ollama (`qwen3` on Ben's machine), then `gemma-4-26b-a4b-it` (`GEMINI_FALLBACK_MODELS`). Supersedes "Gemma 4 through the Gemini API as the default model". Keep the answer size rules on.
+
+**Results.** Pagila v3.1.0 on a local copy of production, October 4, 2026, answer size rules on unless noted, fallback off so each column is one model alone. "Wrong" counts answers whose SQL ran but returned the wrong rows; outages are Google errors that survived the retries.
+
+| | Gemma 4 31B | Gemma 4 26B-A4B | Gemini 3.5 Flash-Lite |
+|---|---|---|---|
+| `pagila_v1`, lenient | 42/47 (run stopped early) | 50/50 | 48/50 |
+| `pagila_v1`, wrong | 0 | 0 | 2 |
+| `pagila_v1`, outages | 5 | 0 (paced) | 0 |
+| `pagila_size_v1`, lenient | 12/17 (rules off: 9/17, 7 wrong) | 17/17 | 16/17 |
+| `pagila_size_v1`, wrong | 0 | 0 | 0 |
+| Median seconds | 38.7 | 12.7 | 0.79 |
+
+Flash-Lite's two wrong answers: t29 returned staff ids instead of names, and t50 grouped months as dates rather than month numbers (the totals were right). Its one size miss was an empty reply (a recitation stop), which now moves on to the next model.
+
+**Alternatives.** Gemma 4 26B as the default (most accurate, about 16 times slower); `gemini-3.8-flash` (the newest Flash, about 20 free requests a day); Gemma 4 with its thinking turned to minimal (2 to 3 seconds but 3 of 5 right in a probe).
+
+**Reasoning.** Gemma 4 thinks before answering: 600 to 4,500 hidden reasoning tokens per question, which is the 15 to 90 seconds users waited. Flash-Lite does not, takes the rules as a system instruction and replies in the JSON schema, and answered in under a second with near-Gemma accuracy. Ollama comes second because it has no quota and is the team's own model; any Ollama failure moves on, since Ben's machine may be off. Gemma 26B comes last: free with its own quota and the most accurate, but slow, and its free tier allows 16,000 input tokens a minute (about 8 questions). The answer size rules fixed every plural and tie error the 31B model made without them (7 wrong to 0). `gemini-3.8-flash` can be set as `GEMINI_MODEL` with a paid key; its free tier is too small for a site.
