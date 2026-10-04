@@ -209,7 +209,8 @@
   align-items: center;
   gap: 11px;
   min-height: 47px;
-  margin: 29px 2px 29px;
+  width: 100%;
+  margin: 0;
   padding: 12px 15px;
   border: 1px solid rgba(208, 242, 248, 0.1);
   border-radius: 16px;
@@ -498,4 +499,91 @@
   .sidebar-glass { backdrop-filter: none; -webkit-backdrop-filter: none; background: #153346; }
   .sidebar-drawer-scrim { backdrop-filter: none; }
   .model-selector__menu { backdrop-filter: none; -webkit-backdrop-filter: none; background: #193b51; }
+}
+
+/* "Ask a Question" slot: shown when the open chat has a question in it,
+   hidden on an empty chat. On hide the bubble pops first; only then does
+   the slot close, so the list below slides up instead of jumping. */
+.sidebar-ask-slot {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin: 29px 2px;
+}
+
+.sidebar-ask-slot > .sidebar-ask {
+  min-height: 0;
+}
+
+.sidebar-ask-slot--shown > .sidebar-ask {
+  min-height: 47px;
+}
+
+.sidebar-ask-slot--hidden {
+  grid-template-rows: 0fr;
+  margin: 10px 2px;
+}
+
+.sidebar-ask-slot--hidden > .sidebar-ask {
+  padding-block: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.sidebar-ask-slot--animate {
+  transition:
+    grid-template-rows 260ms cubic-bezier(.22, 1, .36, 1) 380ms,
+    margin 260ms cubic-bezier(.22, 1, .36, 1) 380ms;
+}
+
+/* Keep the button's full size until the pop has finished. */
+.sidebar-ask-slot--animate.sidebar-ask-slot--hidden > .sidebar-ask {
+  transition: padding 0s 400ms, border-width 0s 400ms, opacity 0s 400ms;
+  animation: sidebar-ask-pop 400ms cubic-bezier(.3, 0, .2, 1) both;
+}
+
+/* A thin ring bursts outward as the bubble pops. */
+.sidebar-ask-slot--animate.sidebar-ask-slot--hidden > .sidebar-ask::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 1.5px solid rgba(190, 240, 250, .55);
+  border-radius: 18px;
+  animation: sidebar-ask-ring 400ms ease-out both;
+  pointer-events: none;
+}
+
+.sidebar-ask-slot--animate.sidebar-ask-slot--shown {
+  transition:
+    grid-template-rows 260ms cubic-bezier(.22, 1, .36, 1),
+    margin 260ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.sidebar-ask-slot--animate.sidebar-ask-slot--shown > .sidebar-ask {
+  animation: sidebar-ask-in 420ms cubic-bezier(.34, 1.56, .64, 1) 120ms both;
+}
+
+@keyframes sidebar-ask-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.06); filter: brightness(1.25); }
+  100% { transform: scale(.35); visibility: hidden; }
+}
+
+@keyframes sidebar-ask-ring {
+  0% { transform: scale(.96); opacity: 0; }
+  35% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+
+@keyframes sidebar-ask-in {
+  0% { transform: scale(.4); opacity: 0; }
+  70% { transform: scale(1.04); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-ask-slot--animate,
+  .sidebar-ask-slot--animate > .sidebar-ask,
+  .sidebar-ask-slot--animate > .sidebar-ask::after { animation: none; transition: none; }
 }

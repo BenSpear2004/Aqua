@@ -13,6 +13,7 @@ date with a measure a line chart, and anything else just the table.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import replace
 from decimal import Decimal
 from typing import Any
@@ -26,8 +27,23 @@ from nl2sql.visualize import suggest_chart
 # frontend formats these in the currency the response names (dollars
 # when none is given).
 CURRENCY_WORDS = (
-    "amount", "revenue", "spent", "payment", "price", "cost", "rate", "sales",
-    "balance", "salary",
+    "amount",
+    "revenue",
+    "spent",
+    "payment",
+    "price",
+    "cost",
+    "rate",
+    "sales",
+    "balance",
+    "salary",
+)
+
+# Column-name parts that mark a number as a point in time, and parts that
+# mark it as a measure of time instead ("day_count", "avg_days").
+TIME_PART_WORDS = frozenset({"year", "month", "quarter", "week", "day", "hour"})
+MEASURE_WORDS = frozenset(
+    {"count", "total", "sum", "avg", "average", "number", "num", "amount", "n"}
 )
 
 
@@ -42,14 +58,33 @@ def _json_value(value: Any) -> Any:
     return value
 
 
+def _is_label_number(name: str) -> bool:
+    """Numbers that name something rather than measure it: years, months,
+    ids. Shown as plain text, so 1993 does not become "1,993"."""
+    tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
+    if "id" in tokens:
+        return True
+    if tokens & TIME_PART_WORDS:
+        # "year" and "opened_year" are labels; "day_count" is a measure.
+        return not tokens & MEASURE_WORDS
+    return False
+
+
 def _column_type(name: str, values: list[Any]) -> str:
     """Pick the frontend column type: currency, number, date or string."""
     present = [v for v in values if v is not None]
     if present and all(isinstance(v, (dt.date, dt.datetime)) for v in present):
         return "date"
-    if present and all(isinstance(v, (int, float, Decimal)) and not isinstance(v, bool) for v in present):
+    if present and all(
+        isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)
+        for v in present
+    ):
         lowered = name.lower()
-        if any(word in lowered for word in CURRENCY_WORDS) and not lowered.endswith("_id"):
+        if _is_label_number(lowered):
+            return "string"
+        if any(word in lowered for word in CURRENCY_WORDS) and not lowered.endswith(
+            "_id"
+        ):
             return "currency"
         return "number"
     return "string"
@@ -69,7 +104,9 @@ def _label(key: str) -> str:
     return key.replace("_", " ").strip().capitalize()
 
 
-def _chart(answer: Answer, keys: list[str], columns: list[dict[str, Any]]) -> tuple[list, list]:
+def _chart(
+    answer: Answer, keys: list[str], columns: list[dict[str, Any]]
+) -> tuple[list, list]:
     """The visualizations and kpis lists for one result.
 
     The frontend draws one x column, so a chart labelled by first and
@@ -119,7 +156,11 @@ def to_response(answer: Answer, display: Display | None = None) -> dict[str, Any
             "tables": [],
             "visualizations": [],
             "kpis": [],
-            "error": {"code": answer.error_code, "message": answer.error, "retryable": False},
+            "error": {
+                "code": answer.error_code,
+                "message": answer.error,
+                "retryable": False,
+            },
         }
 
     display = display or Display()
@@ -140,7 +181,9 @@ def to_response(answer: Answer, display: Display | None = None) -> dict[str, Any
             if display.currency:
                 column["currency"] = display.currency
         columns.append(column)
-    rows = [{key: _json_value(row[i]) for i, key in enumerate(keys)} for row in answer.rows]
+    rows = [
+        {key: _json_value(row[i]) for i, key in enumerate(keys)} for row in answer.rows
+    ]
     visualizations, kpis = _chart(answer, keys, columns)
     return {
         "status": "success",
@@ -148,7 +191,9 @@ def to_response(answer: Answer, display: Display | None = None) -> dict[str, Any
         "model": answer.model,
         "message": summarize(answer.columns, answer.rows, answer.truncated)
         + _size_note(answer),
-        "tables": [{"id": "result", "title": answer.question, "columns": columns, "rows": rows}],
+        "tables": [
+            {"id": "result", "title": answer.question, "columns": columns, "rows": rows}
+        ],
         "visualizations": visualizations,
         "kpis": kpis,
         "error": None,

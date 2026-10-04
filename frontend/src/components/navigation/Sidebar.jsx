@@ -56,15 +56,44 @@ function ProjectFolder({ folder, conversations, activeConversationId, expandedFo
   );
 }
 
+// "Ask a Question" only makes sense when the open chat already has a
+// question in it; on an empty chat it would just open another empty one.
+// It pops away like a bubble and pops back once a question is sent. The
+// first render never animates, so the button does not pop on page load.
+function AskButton({ visible, onClick }) {
+  const [animate, setAnimate] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setAnimate(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const state = visible ? "shown" : "hidden";
+  return (
+    <div className={`sidebar-ask-slot sidebar-ask-slot--${state}${animate ? " sidebar-ask-slot--animate" : ""}`}>
+      <button
+        className="sidebar-ask"
+        type="button"
+        onClick={onClick}
+        tabIndex={visible ? undefined : -1}
+        aria-hidden={visible ? undefined : true}
+        inert={visible ? undefined : true}
+      >
+        <NavIcon kind="plus" />
+        <span>Ask a Question</span>
+      </button>
+    </div>
+  );
+}
+
 function SidebarContent({ conversations, activeConversationId, projects, faqs, expandedFolderIds, onToggleFolder, onStartConversation, onSelectConversation, onSelectFAQ, models, selectedModelId, onSelectModel, auth, idPrefix }) {
   const recent = conversations.filter((conversation) => conversation.messages.length).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6);
   return (
     <>
       {models.length > 0 ? <ModelSelector models={models} selectedModelId={selectedModelId} onSelectModel={onSelectModel} /> : <div className="model-selector"><span className="model-selector__name">AQUA</span></div>}
-      <button className="sidebar-ask" type="button" onClick={onStartConversation}>
-        <NavIcon kind="plus" />
-        <span>Ask a Question</span>
-      </button>
+      <AskButton
+        visible={Boolean(conversations.find((c) => c.id === activeConversationId)?.messages.length)}
+        onClick={onStartConversation}
+      />
+
       <nav className="sidebar-navigation" aria-label="AQUA conversations">
         <section className="sidebar-section" aria-labelledby={`${idPrefix}-faq-heading`}>
           <h2 id={`${idPrefix}-faq-heading`}>Frequently Asked Questions</h2>

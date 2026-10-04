@@ -24,3 +24,11 @@ test("headline numbers use the response's currency, dollars otherwise", () => {
   assert.equal(formatMetric(12.5, "percentage"), "12.5%");
   assert.equal(formatMetric(1234.56, "number"), "1,234.6");
 });
+
+test("years and ids are shown without thousands separators", async () => {
+  const { formatCell, formatMetric } = await import("../src/components/data/financialValues.js");
+  assert.equal(formatCell(1993, { type: "string" }), "1993");
+  assert.equal(formatCell(1139, { type: "number" }), "1,139");
+  assert.equal(formatMetric(1993, "string"), "1993");
+  assert.equal(formatMetric(1139, "number"), "1,139");
+});

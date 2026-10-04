@@ -84,6 +84,19 @@ function LogoModel({ reducedMotion, onReady }) {
   return <primitive object={model} dispose={null} />;
 }
 
+// The canvas draws on demand. Switching between the large and compact logo
+// changes its pixel ratio, which clears the drawing buffer, so draw again
+// right away and once more after the CSS resize transition has finished.
+function RedrawOnChange({ signal }) {
+  const { invalidate } = useThree();
+  useEffect(() => {
+    invalidate();
+    const timer = setTimeout(invalidate, 700);
+    return () => clearTimeout(timer);
+  }, [signal, invalidate]);
+  return null;
+}
+
 export default function AquaLogo3D({ compact = false }) {
   const reducedMotion = Boolean(useReducedMotion());
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 700px)").matches);
@@ -107,7 +120,14 @@ export default function AquaLogo3D({ compact = false }) {
           <Canvas
             orthographic
             camera={{ position: [0, 0, 12], near: 0.1, far: 40 }}
-            dpr={compact || mobile ? [1, 1.15] : [1, 1.5]}
+            // One pixel ratio for both sizes: the canvas keeps its full size
+            // either way, and changing the ratio clears the drawing buffer.
+            dpr={mobile ? [1, 1.15] : [1, 1.5]}
+            // The compact logo is a CSS scale() of this canvas. Measure the
+            // untransformed layout size, or the canvas shrinks to the scaled
+            // size and stays tiny and blurry after the scale is removed
+            // (a transform change does not trigger a new measurement).
+            resize={{ offsetSize: true }}
             fallback={null}
             frameloop="demand"
             gl={{ alpha: true, antialias: true, powerPreference: "low-power" }}
@@ -117,6 +137,7 @@ export default function AquaLogo3D({ compact = false }) {
             }}
           >
             <ContextGuard onFailure={onFailure} />
+            <RedrawOnChange signal={`${compact}-${mobile}`} />
             <StudioReflections />
             <ambientLight intensity={0.6} />
             <directionalLight position={[-3, 5, 8]} intensity={2.2} color="#e9fcff" />
