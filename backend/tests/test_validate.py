@@ -271,3 +271,64 @@ def test_table_functions_are_not_treated_as_tables() -> None:
         validate_sql("SELECT * FROM generate_series(1, 3)", dialect="postgres", allowed_tables=ALLOWED),
         exp.Query,
     )
+
+
+# ---- statements that are never allowed (Postgres) ----
+
+NOT_SELECT = "Only SELECT queries are allowed"
+
+# (sql, fragment of the expected error)
+POSTGRES_NON_SELECT = [
+    # Changing session settings. SET is also how a session would switch
+    # off default_transaction_read_only, so it must never get through.
+    ("SET statement_timeout = 0", NOT_SELECT),
+    ("SET SESSION default_transaction_read_only = off", NOT_SELECT),
+    ("RESET ALL", NOT_SELECT),
+    ("SET ROLE tsdbadmin", NOT_SELECT),
+    # Running procedures or anonymous code blocks.
+    ("CALL do_something()", NOT_SELECT),
+    ("DO $$ BEGIN DELETE FROM film; END $$", NOT_SELECT),
+    # Transaction control.
+    ("BEGIN", NOT_SELECT),
+    ("START TRANSACTION", NOT_SELECT),
+    ("COMMIT", NOT_SELECT),
+    ("ROLLBACK", NOT_SELECT),
+    ("SAVEPOINT s1", NOT_SELECT),
+    ("BEGIN; SELECT 1", "exactly one statement"),
+    # Writes hidden inside a WITH clause (data-modifying CTEs).
+    ("WITH d AS (DELETE FROM film WHERE film_id = 1 RETURNING *) SELECT * FROM d", "forbidden operation: DELETE"),
+    ("WITH u AS (UPDATE film SET title = 'x' RETURNING *) SELECT * FROM u", "forbidden operation: UPDATE"),
+    (
+        "WITH i AS (INSERT INTO actor (first_name, last_name) VALUES ('a', 'b') RETURNING *) SELECT * FROM i",
+        "forbidden operation: INSERT",
+    ),
+    # Moving data in or out, locking, and maintenance.
+    ("COPY film TO STDOUT", NOT_SELECT),
+    ("COPY (SELECT * FROM film) TO '/tmp/f'", NOT_SELECT),
+    ("LOCK TABLE film", NOT_SELECT),
+    ("VACUUM film", NOT_SELECT),
+    ("ANALYZE film", NOT_SELECT),
+    # Messaging, prepared statements and cursors.
+    ("LISTEN chan", NOT_SELECT),
+    ("NOTIFY chan, 'hi'", "could not be parsed"),
+    ("PREPARE p AS SELECT 1", NOT_SELECT),
+    ("EXECUTE p", NOT_SELECT),
+    ("DECLARE c CURSOR FOR SELECT * FROM film", NOT_SELECT),
+    # EXPLAIN ANALYZE actually runs the statement it explains.
+    ("EXPLAIN ANALYZE DELETE FROM film", NOT_SELECT),
+    # Shorthand forms of SELECT. Rejected to keep the rule simple.
+    ("TABLE film", NOT_SELECT),
+    ("VALUES (1), (2)", NOT_SELECT),
+]
+
+
+@pytest.mark.parametrize(("sql", "reason"), POSTGRES_NON_SELECT)
+def test_postgres_non_select_statements_are_rejected(sql: str, reason: str) -> None:
+    with pytest.raises(UnsafeQueryError, match=reason):
+        validate_sql(sql, dialect="postgres")
+
+
+def test_read_only_cte_still_passes_in_postgres() -> None:
+    """The WITH rejections above are about writes, not WITH itself."""
+    sql = "WITH x AS (SELECT * FROM film) SELECT * FROM x"
+    assert isinstance(validate_sql(sql, dialect="postgres"), exp.Query)
