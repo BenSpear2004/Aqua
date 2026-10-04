@@ -62,6 +62,13 @@ def test_instruction_targets_postgres_and_case_insensitive_matching() -> None:
     assert "ILIKE" in SYSTEM_INSTRUCTION
 
 
+def test_enum_columns_are_compared_with_equals() -> None:
+    """ILIKE on an enum column is a Postgres error. In the first baseline
+    run, "films rated PG-13" failed that way and needed the retry."""
+    assert "ENUM" in SYSTEM_INSTRUCTION
+    assert "rating = 'PG-13'" in SYSTEM_INSTRUCTION
+
+
 # ---- extract_sql ----
 
 

@@ -82,10 +82,48 @@ Each entry records the decision, the alternatives considered, and why.
 
 **Reasoning.** Retrieval runs inside the web app, so its client is a runtime dependency. The fine-tuning stack (PyTorch, Unsloth) is large and never needed by the web app.
 
-## October 2026: Phase 3 baseline on qwen3:8b
+## October 2026: First evaluation, baseline against retrieval
 
-**Decision.** The Phase 3 baseline is qwen3:8b with reasoning on, the full schema and no retrieval, on the 50 test questions in `eval/datasets/pagila_v1.jsonl`: 100% lenient and 80% exact execution accuracy, 100% valid SQL, no rejections or database errors, 2 retries, median 20 s per question (slowest 76 s). By difficulty, exact was 15/15 easy, 16/20 medium and 9/15 hard; lenient was 100% for each. Phase 4 is compared against these numbers.
+**Decision.** Turn retrieval on in production (`RETRIEVAL=on`), on the strength of the first comparison below. Re-run both modes whenever the model, prompt or dataset changes.
 
-**Alternatives.** Report exact accuracy only; run the baseline with reasoning off.
+**Results.** `pagila_v1.jsonl`, 50 test questions, `qwen3:4b` with reasoning on (the model set in the server's `.env`), October 4, 2026, on the production Tiger Cloud service.
 
-**Reasoning.** All 10 exact misses were correct answers with an extra column, either an id or the count the query ranked or filtered by, which lenient scoring accepts; exact is kept so the difference stays visible. Both retries were ILIKE on the `rating` enum, which Postgres refuses; the prompt now says to compare enums with `=`, so those questions should take one attempt. Reasoning stays on because it was more accurate in earlier testing. With lenient accuracy at 100%, this set cannot show retrieval improving accuracy, so Phase 4 should also report prompt size and latency, and a harder question set is needed to measure accuracy gains.
+| | Baseline (every table, no examples) | Retrieval (nearest tables, 3 examples) |
+|---|---|---|
+| Execution accuracy, exact | 43/50 (86%) | 45/50 (90%) |
+| Execution accuracy, lenient | 48/50 (96%) | 49/50 (98%) |
+| Easy / medium, lenient | 15/15, 19/20 | 15/15, 20/20 |
+| Hard, lenient | 14/15 | 14/15 |
+| Rejected by the validator | 0 | 0 |
+| Questions that needed the retry | 3 | 1 |
+| Median seconds per question | 26.7 | 20.0 |
+
+One baseline question (t47) was first lost to a DNS failure reaching the database, not to the model. It was rerun alone with `python eval/run_eval.py --ids t47` and passed both ways; the baseline column includes that rerun.
+
+**What failed.** Baseline: t24 returned staff ids instead of names; t40 used a LEFT JOIN that returned films with any unrented copy rather than films never rented. Retrieval: t37 grouped actors by name, so the two different actors named Susan Davis were counted as one. Exact-only misses in both runs (t37 to t46) added a helpful count or total column, which lenient scoring accepts.
+
+**Alternatives.** Keep the full schema; wait for a larger question set before deciding.
+
+**Reasoning.** Retrieval was equal or better on every measure (tied on hard questions, ahead on medium ones and overall) and about 6 seconds faster per question, because the prompt is shorter. The gain is small in absolute terms (1 to 2 questions out of 50), so it is evidence, not proof; a larger or harder question set is the next step for the report. The t37 failure points at a real weakness (grouping by name instead of key), but fixing it by editing the prompt after reading test failures would tune to the test set. Any fix must be checked on questions the model has not been graded on, such as new train or held-out questions.
+
+## October 2026: Baseline on qwen3:8b
+
+**Decision.** Recommend switching the server's `OLLAMA_MODEL` from `qwen3:4b` to `qwen3:8b`, the code default, once its speed is checked on the server.
+
+**Results.** `pagila_v1.jsonl`, 50 test questions, baseline mode (every table, no examples), `qwen3:8b` with reasoning on, October 4, 2026, on the production Tiger Cloud service and Ben's Ollama server.
+
+| | qwen3:8b baseline |
+|---|---|
+| Execution accuracy, exact | 40/50 (80%) |
+| Execution accuracy, lenient | 50/50 (100%) |
+| Easy / medium, lenient | 15/15, 20/20 |
+| Hard, lenient | 15/15 |
+| Rejected by the validator | 0 |
+| Questions that needed the retry | 2 |
+| Median seconds per question | 20.3 |
+
+**What failed.** Nothing on lenient scoring. Both retries (t04, t35) were ILIKE on the `rating` enum, which Postgres refuses; after the prompt fix, a rerun of the five rating questions took one attempt each (t04 59 s to 13 s, t35 62 s to 15 s). The 10 exact-only misses added an id or the count the query ranked by. t24 and t40, which `qwen3:4b` lost in its baseline, were both answered correctly.
+
+**Alternatives.** Stay on `qwen3:4b` with retrieval.
+
+**Reasoning.** Without retrieval, `qwen3:8b` matched or beat `qwen3:4b` with retrieval on every lenient measure and was about as fast in this run. Its lower exact score comes from adding helpful columns, not from wrong answers. Speed on the server under real use still needs checking, since this run sent one question at a time. Retrieval on `qwen3:8b` is the next comparison.

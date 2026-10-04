@@ -32,8 +32,11 @@ Rules:
 - Answer with exactly one SQL SELECT statement.
 - Use only the tables and columns in the schema you are given.
 - Use {DIALECT_NAME} syntax.
-- Text comparisons are case-sensitive. When comparing a column to any
-  word or name taken from the question, use ILIKE instead of =.
+- Text comparisons are case-sensitive. When comparing a text column to
+  any word or name taken from the question, use ILIKE instead of =.
+- Columns whose type is an ENUM do not support ILIKE. Compare them with
+  = and one of the type's listed labels, written exactly, such as
+  rating = 'PG-13'.
 - Name the columns you select; never use SELECT *.
 - Give computed columns a short snake_case alias, such as total_revenue.
 """
