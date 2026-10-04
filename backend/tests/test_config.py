@@ -89,7 +89,7 @@ def test_settings_can_be_built_by_hand() -> None:
 def test_gemini_and_retrieval_defaults() -> None:
     settings = settings_from({})
     assert settings.gemini_api_key == ""
-    assert settings.gemini_model == "gemma-4-31b-it"
+    assert settings.gemini_model == "gemini-3.5-flash-lite"
     assert settings.gemini_embed_model == "gemini-embedding-2"
     assert settings.indexer_database_url == ""
     assert settings.retrieval is False  # off until the index is built
@@ -140,3 +140,10 @@ def test_answer_size_and_cache_settings() -> None:
         settings_from({"ANSWER_CACHE_SECONDS": "ten"})
     with pytest.raises(ConfigError, match="ANSWER_CACHE_SECONDS"):
         settings_from({"ANSWER_CACHE_SECONDS": "-5"})
+
+
+def test_gemini_fallback_models() -> None:
+    assert settings_from({}).gemini_fallback_models == ("gemma-4-26b-a4b-it",)
+    listed = settings_from({"GEMINI_FALLBACK_MODELS": " gemma-4-26b-a4b-it, gemma-4-31b-it "})
+    assert listed.gemini_fallback_models == ("gemma-4-26b-a4b-it", "gemma-4-31b-it")
+    assert settings_from({"GEMINI_FALLBACK_MODELS": "none"}).gemini_fallback_models == ()

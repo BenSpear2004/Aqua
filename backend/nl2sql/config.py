@@ -24,7 +24,12 @@ from nl2sql.auth_config import normalize_app_origin
 
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
-DEFAULT_GEMINI_MODEL = "gemma-4-31b-it"
+# Fast and free: answers in about a second, with no thinking step.
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
+# Tried in order when the main model is out of quota or down, before
+# Ollama. Gemma 4 26B is free with its own quota, accurate, but slower
+# (it thinks before answering).
+DEFAULT_GEMINI_FALLBACK_MODELS = ("gemma-4-26b-a4b-it",)
 DEFAULT_GEMINI_EMBED_MODEL = "gemini-embedding-2"
 DEFAULT_APP_ORIGIN = "https://aqua-ai.us"
 DEFAULT_SESSION_MAX_AGE_SECONDS = 3600
@@ -68,10 +73,12 @@ class Settings:
     # indexer (retrieval/store.py), never by the web app.
     indexer_database_url: str = field(default="", repr=False)
     # Gemini API: embeddings for retrieval, and SQL generation when
-    # llm_provider is "gemini". gemma-4-31b-it is free; a paid key can
-    # use a Gemini model instead.
+    # llm_provider is "gemini". The default model and fallbacks are free.
     gemini_api_key: str = field(default="", repr=False)
     gemini_model: str = DEFAULT_GEMINI_MODEL
+    # Other Gemini API models to try, in order, before Ollama when
+    # llm_fallback is on and gemini_model is out of quota or down.
+    gemini_fallback_models: tuple[str, ...] = DEFAULT_GEMINI_FALLBACK_MODELS
     gemini_embed_model: str = DEFAULT_GEMINI_EMBED_MODEL
     # Which provider llm.py sends prompts to: "ollama" or "gemini".
     llm_provider: str = DEFAULT_LLM_PROVIDER
@@ -107,6 +114,15 @@ def _flag(name: str, value: str) -> bool:
     if lowered in _FALSE:
         return False
     raise ConfigError(f"{name} must be true or false, got {value!r}.")
+
+
+def _model_list(value: str) -> tuple[str, ...]:
+    """GEMINI_FALLBACK_MODELS: blank keeps the default, "none" means none."""
+    if not value:
+        return DEFAULT_GEMINI_FALLBACK_MODELS
+    if value.lower() == "none":
+        return ()
+    return tuple(part.strip() for part in value.split(",") if part.strip())
 
 
 def _comma_set(value: str, *, lowercase: bool = False) -> frozenset[str]:
@@ -150,7 +166,9 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
             int(cache_seconds) if cache_seconds else DEFAULT_ANSWER_CACHE_SECONDS
         )
     except ValueError:
-        raise ConfigError("ANSWER_CACHE_SECONDS must be a whole number of seconds.") from None
+        raise ConfigError(
+            "ANSWER_CACHE_SECONDS must be a whole number of seconds."
+        ) from None
     if not 0 <= answer_cache_seconds <= 86400:
         raise ConfigError("ANSWER_CACHE_SECONDS must be between 0 and 86400.")
     google_client_id = get("GOOGLE_CLIENT_ID")
@@ -186,6 +204,7 @@ def settings_from(environ: Mapping[str, str]) -> Settings:
         indexer_database_url=get("INDEXER_DATABASE_URL"),
         gemini_api_key=get("GEMINI_API_KEY"),
         gemini_model=get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL,
+        gemini_fallback_models=_model_list(get("GEMINI_FALLBACK_MODELS")),
         gemini_embed_model=get("GEMINI_EMBED_MODEL") or DEFAULT_GEMINI_EMBED_MODEL,
         llm_provider=provider,
         llm_fallback=_flag("LLM_FALLBACK", fallback) if fallback else True,

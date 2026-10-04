@@ -96,3 +96,37 @@ def test_single_instruction_separates_a_value_from_the_rows_that_reach_it() -> N
     """'The highest replacement cost' wants MAX(); 'which film' wants ties."""
     text = AnswerSize("single").instruction
     assert "MAX or MIN" in text and "every tied row" in text
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "give me a list of the top spenders",
+        "list the top spenders",
+        "top spenders",
+        "show me the biggest customers",
+        "who are our best customers",
+        "list customers by total spend",
+        "show films ranked by number of rentals",
+        "rank accounts by balance",
+    ],
+)
+def test_lists_without_a_number_default_to_the_top_ten(question: str) -> None:
+    assert answer_size(question) == AnswerSize("list", DEFAULT_LIST_ROWS)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "show rentals by store",
+        "How many films by category?",
+        "list payments made by Mary Smith",
+    ],
+)
+def test_groupings_and_filters_by_something_are_not_rankings(question: str) -> None:
+    assert answer_size(question).kind == "open"
+
+
+def test_lists_are_ordered_from_highest_unless_asking_for_the_lowest() -> None:
+    text = AnswerSize("list", 10).instruction
+    assert "from highest to lowest" in text and "lowest first only" in text
