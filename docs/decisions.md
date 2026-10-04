@@ -90,18 +90,18 @@ Each entry records the decision, the alternatives considered, and why.
 
 | | Baseline (every table, no examples) | Retrieval (nearest tables, 3 examples) |
 |---|---|---|
-| Execution accuracy, exact | 42/50 (84%) | 45/50 (90%) |
-| Execution accuracy, lenient | 47/50 (94%) | 49/50 (98%) |
+| Execution accuracy, exact | 43/50 (86%) | 45/50 (90%) |
+| Execution accuracy, lenient | 48/50 (96%) | 49/50 (98%) |
 | Easy / medium, lenient | 15/15, 19/20 | 15/15, 20/20 |
-| Hard, lenient | 13/15 | 14/15 |
+| Hard, lenient | 14/15 | 14/15 |
 | Rejected by the validator | 0 | 0 |
 | Questions that needed the retry | 3 | 1 |
-| Median seconds per question | 26.3 | 20.0 |
+| Median seconds per question | 26.7 | 20.0 |
 
-One baseline question (t47) was lost to a DNS failure reaching the database, not to the model; excluding it, the baseline is 42/49 exact and 47/49 lenient. Rerun it with `python eval/run_eval.py --ids t47` and update this entry.
+One baseline question (t47) was first lost to a DNS failure reaching the database, not to the model. It was rerun alone with `python eval/run_eval.py --ids t47` and passed both ways; the baseline column includes that rerun.
 
 **What failed.** Baseline: t24 returned staff ids instead of names; t40 used a LEFT JOIN that returned films with any unrented copy rather than films never rented. Retrieval: t37 grouped actors by name, so the two different actors named Susan Davis were counted as one. Exact-only misses in both runs (t37 to t46) added a helpful count or total column, which lenient scoring accepts.
 
 **Alternatives.** Keep the full schema; wait for a larger question set before deciding.
 
-**Reasoning.** Retrieval was higher on every measure and about 6 seconds faster per question, because the prompt is shorter. The gain is small in absolute terms (2 to 3 questions out of 50), so it is evidence, not proof; a larger or harder question set is the next step for the report. The t37 failure points at a real weakness (grouping by name instead of key), but fixing it by editing the prompt after reading test failures would tune to the test set. Any fix must be checked on questions the model has not been graded on, such as new train or held-out questions.
+**Reasoning.** Retrieval was equal or better on every measure (tied on hard questions, ahead on medium ones and overall) and about 6 seconds faster per question, because the prompt is shorter. The gain is small in absolute terms (1 to 2 questions out of 50), so it is evidence, not proof; a larger or harder question set is the next step for the report. The t37 failure points at a real weakness (grouping by name instead of key), but fixing it by editing the prompt after reading test failures would tune to the test set. Any fix must be checked on questions the model has not been graded on, such as new train or held-out questions.
